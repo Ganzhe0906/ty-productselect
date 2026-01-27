@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ios-bg: #F2F2F7;
+  --ios-card-bg: rgba(255, 255, 255, 0.8);
+  --ios-label: #000000;
+  --ios-secondary-label: #8E8E93;
+  --ios-blue: #007AFF;
+  --ios-green: #34C759;
+  --ios-red: #FF3B30;
+  --ios-orange: #FF9500;
+}
+
+body {
+  background-color: var(--ios-bg);
+  color: var(--ios-label);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  overflow-x: hidden;
+}
+
+@layer components {
+  .ios-blur {
+    @apply backdrop-blur-xl bg-white/80;
+  }
+  
+  .ios-card {
+    @apply rounded-[2.5rem] shadow-[0_10px_40px_rgba(0,0,0,0.08)] border border-white/40;
+  }
+
+  .ios-button {
+    @apply transition-all active:scale-95 disabled:opacity-50;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-gray-200/50 rounded-full;
+  }
+}
