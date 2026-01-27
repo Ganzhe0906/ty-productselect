@@ -882,140 +882,139 @@ export default function Home() {
               </motion.div>
             )}
 
-            {/* 3. Selection State */}
-            {view === 'home' && products.length > 0 && !isFinished && (
+            {/* 3. Main Content (Selection or Finished) */}
+            {view === 'home' && products.length > 0 && (
               <motion.div 
-                key="selection"
+                key="home-content"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 px-4 flex flex-col"
+                className="absolute inset-0 flex flex-col"
               >
-                {/* Top Controls: Progress, Save, Exit */}
-                <div className="mb-4 space-y-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <button 
-                      onClick={reset}
-                      className="px-4 py-2 bg-white text-[#FF3B30] rounded-xl font-bold text-sm shadow-sm border border-gray-100 hover:bg-red-50 transition-colors flex items-center gap-2"
-                    >
-                      <X size={16} /> 退出
-                    </button>
-                    
-                    <div className="flex-1 flex flex-col items-center">
-                      <div className="text-[10px] font-bold text-black mb-1">
-                        {currentIndex + 1} <span className="text-[#8E8E93]">/ {products.length}</span>
-                      </div>
-                      <div className="w-full h-2 bg-gray-200/50 rounded-full overflow-hidden">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${((currentIndex + 1) / products.length) * 100}%` }}
-                          className="h-full bg-[#007AFF] shadow-[0_0_10px_rgba(0,122,255,0.5)]"
-                        />
+                {!isFinished ? (
+                  <div className="flex-1 flex flex-col px-4">
+                    {/* Top Controls: Progress, Save, Exit */}
+                    <div className="mb-4 space-y-3">
+                      <div className="flex items-center justify-between gap-4">
+                        <button 
+                          onClick={reset}
+                          className="px-4 py-2 bg-white text-[#FF3B30] rounded-xl font-bold text-sm shadow-sm border border-gray-100 hover:bg-red-50 transition-colors flex items-center gap-2"
+                        >
+                          <X size={16} /> 退出
+                        </button>
+                        
+                        <div className="flex-1 flex flex-col items-center">
+                          <div className="text-[10px] font-bold text-black mb-1">
+                            {currentIndex + 1} <span className="text-[#8E8E93]">/ {products.length}</span>
+                          </div>
+                          <div className="w-full h-2 bg-gray-200/50 rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${((currentIndex + 1) / products.length) * 100}%` }}
+                              className="h-full bg-[#007AFF] shadow-[0_0_10px_rgba(0,122,255,0.5)]"
+                            />
+                          </div>
+                        </div>
+
+                        <button 
+                          onClick={saveToHistory}
+                          className="px-4 py-2 bg-[#007AFF] text-white rounded-xl font-bold text-sm shadow-sm hover:bg-blue-600 transition-colors flex items-center gap-2"
+                        >
+                          <Archive size={16} /> 保存
+                        </button>
                       </div>
                     </div>
 
-                    <button 
-                      onClick={saveToHistory}
-                      className="px-4 py-2 bg-[#007AFF] text-white rounded-xl font-bold text-sm shadow-sm hover:bg-blue-600 transition-colors flex items-center gap-2"
-                    >
-                      <Archive size={16} /> 保存
-                    </button>
+                    {/* Card Stack */}
+                    <div className="flex-1 relative">
+                      {/* Background Card */}
+                      {currentIndex + 1 < products.length && (
+                        <ProductCard 
+                          product={products[currentIndex + 1]} 
+                          onSwipe={() => {}} 
+                          isTop={false} 
+                        />
+                      )}
+                      {/* Active Card */}
+                      <ProductCard 
+                        key={currentIndex}
+                        product={products[currentIndex]} 
+                        onSwipe={handleSwipe} 
+                        isTop={true} 
+                      />
+                    </div>
+
+                    {/* Shortcuts / Info */}
+                    <div className="flex justify-center gap-6 md:gap-12 mt-4 mb-2">
+                      <button 
+                        onClick={() => handleSwipe('left')}
+                        className="flex flex-col items-center gap-1 ios-button group outline-none"
+                        title="Press Left Arrow or Click to Pass"
+                      >
+                        <div className="px-3 py-1 bg-white rounded-xl shadow-sm border border-gray-100 font-bold text-[#FF3B30] text-[10px] group-active:scale-95 transition-transform">LEFT</div>
+                        <span className="text-[8px] font-bold text-[#8E8E93] uppercase tracking-widest">Pass</span>
+                      </button>
+
+                      <button 
+                        onClick={handleBack}
+                        disabled={currentIndex === 0}
+                        className={`flex flex-col items-center gap-1 ios-button group outline-none ${currentIndex === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                        title="Press Up Arrow or Click to Go Back"
+                      >
+                        <div className="px-3 py-1 bg-blue-500 rounded-xl shadow-sm font-bold text-white text-[10px] group-active:scale-95 transition-transform">UP</div>
+                        <span className="text-[8px] font-bold text-[#8E8E93] uppercase tracking-widest">Back</span>
+                      </button>
+
+                      <button 
+                        onClick={() => handleSwipe('right')}
+                        className="flex flex-col items-center gap-1 ios-button group outline-none"
+                        title="Press Right Arrow or Click to Like"
+                      >
+                        <div className="px-3 py-1 bg-black rounded-xl shadow-sm font-bold text-white text-[10px] group-active:scale-95 transition-transform">RIGHT</div>
+                        <span className="text-[8px] font-bold text-[#8E8E93] uppercase tracking-widest">Like</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
-
-                {/* Card Stack */}
-                <div className="flex-1 relative">
-                  {/* Background Card */}
-                  {currentIndex + 1 < products.length && (
-                    <ProductCard 
-                      product={products[currentIndex + 1]} 
-                      onSwipe={() => {}} 
-                      isTop={false} 
-                    />
-                  )}
-                  {/* Active Card */}
-                  <ProductCard 
-                    key={currentIndex}
-                    product={products[currentIndex]} 
-                    onSwipe={handleSwipe} 
-                    isTop={true} 
-                  />
-                </div>
-
-                {/* Shortcuts / Info - Moved inside selection view */}
-                <div className="flex justify-center gap-6 md:gap-12 mt-4 mb-2">
-                  <button 
-                    onClick={() => handleSwipe('left')}
-                    className="flex flex-col items-center gap-1 ios-button group outline-none"
-                    title="Press Left Arrow or Click to Pass"
+                ) : (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="flex-1 flex flex-col items-center justify-center p-6 md:p-12 text-center bg-white/80 ios-blur ios-card mx-4 mb-4"
                   >
-                    <div className="px-3 py-1 bg-white rounded-xl shadow-sm border border-gray-100 font-bold text-[#FF3B30] text-[10px] group-active:scale-95 transition-transform">LEFT</div>
-                    <span className="text-[8px] font-bold text-[#8E8E93] uppercase tracking-widest">Pass</span>
-                  </button>
-
-                  <button 
-                    onClick={handleBack}
-                    disabled={currentIndex === 0}
-                    className={`flex flex-col items-center gap-1 ios-button group outline-none ${currentIndex === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
-                    title="Press Up Arrow or Click to Go Back"
-                  >
-                    <div className="px-3 py-1 bg-blue-500 rounded-xl shadow-sm font-bold text-white text-[10px] group-active:scale-95 transition-transform">UP</div>
-                    <span className="text-[8px] font-bold text-[#8E8E93] uppercase tracking-widest">Back</span>
-                  </button>
-
-                  <button 
-                    onClick={() => handleSwipe('right')}
-                    className="flex flex-col items-center gap-1 ios-button group outline-none"
-                    title="Press Right Arrow or Click to Like"
-                  >
-                    <div className="px-3 py-1 bg-black rounded-xl shadow-sm font-bold text-white text-[10px] group-active:scale-95 transition-transform">RIGHT</div>
-                    <span className="text-[8px] font-bold text-[#8E8E93] uppercase tracking-widest">Like</span>
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* 4. Finished State */}
-            {view === 'home' && isFinished && (
-              <motion.div
-                key="finished"
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="absolute inset-0 ios-card bg-white/80 ios-blur flex flex-col items-center justify-center p-6 md:p-12 text-center"
-              >
-                <div className="w-16 h-16 md:w-24 md:h-24 bg-[#34C759]/10 rounded-[1.5rem] md:rounded-[2rem] flex items-center justify-center mb-6 md:mb-8 text-[#34C759]">
-                  <CheckCircle2 size={48} strokeWidth={2.5} />
-                </div>
-                <h2 className="text-3xl md:text-4xl font-black text-black mb-3 md:mb-4 tracking-tight">Mission Complete</h2>
-                <p className="text-lg md:text-xl mb-8 md:mb-12">
-                  Processed <span className="text-black font-bold">{products.length}</span> items<br />
-                  You liked <span className="text-[#34C759] font-black">{likedProducts.length}</span> potentials
-                </p>
-                
-                <div className="flex flex-col w-full max-w-sm gap-3 md:gap-4">
-                  <button
-                    onClick={handleExport}
-                    className="w-full bg-[#34C759] text-white py-4 md:py-5 rounded-[1.2rem] md:rounded-[1.5rem] font-bold flex items-center justify-center gap-3 ios-button shadow-2xl shadow-green-500/20 text-base md:text-lg"
-                  >
-                    <Download size={24} /> Export Results
-                  </button>
-                  <button
-                    onClick={() => {
-                      setView('completed');
-                      reset();
-                    }}
-                    className="w-full bg-[#007AFF] text-white py-4 md:py-5 rounded-[1.2rem] md:rounded-[1.5rem] font-bold flex items-center justify-center gap-3 ios-button shadow-2xl shadow-blue-500/20 text-base md:text-lg"
-                  >
-                    <Library size={24} /> 完成选品库
-                  </button>
-                  <button
-                    onClick={reset}
-                    className="w-full bg-gray-100 text-[#8E8E93] py-4 md:py-5 rounded-[1.2rem] md:rounded-[1.5rem] font-bold flex items-center justify-center gap-3 ios-button text-base md:text-lg"
-                  >
-                    <RefreshCw size={24} /> Start Over
-                  </button>
-                </div>
+                    <div className="w-16 h-16 md:w-24 md:h-24 bg-[#34C759]/10 rounded-[1.5rem] md:rounded-[2rem] flex items-center justify-center mb-6 md:mb-8 text-[#34C759]">
+                      <CheckCircle2 size={48} strokeWidth={2.5} />
+                    </div>
+                    <h2 className="text-3xl md:text-4xl font-black text-black mb-3 md:mb-4 tracking-tight">Mission Complete</h2>
+                    <p className="text-lg md:text-xl mb-8 md:mb-12">
+                      Processed <span className="text-black font-bold">{products.length}</span> items<br />
+                      You liked <span className="text-[#34C759] font-black">{likedProducts.length}</span> potentials
+                    </p>
+                    
+                    <div className="flex flex-col w-full max-w-sm gap-3 md:gap-4">
+                      <button
+                        onClick={handleExport}
+                        className="w-full bg-[#34C759] text-white py-4 md:py-5 rounded-[1.2rem] md:rounded-[1.5rem] font-bold flex items-center justify-center gap-3 ios-button shadow-2xl shadow-green-500/20 text-base md:text-lg"
+                      >
+                        <Download size={24} /> Export Results
+                      </button>
+                      <button
+                        onClick={() => {
+                          setView('completed');
+                          reset();
+                        }}
+                        className="w-full bg-[#007AFF] text-white py-4 md:py-5 rounded-[1.2rem] md:rounded-[1.5rem] font-bold flex items-center justify-center gap-3 ios-button shadow-2xl shadow-blue-500/20 text-base md:text-lg"
+                      >
+                        <Library size={24} /> 完成选品库
+                      </button>
+                      <button
+                        onClick={reset}
+                        className="w-full bg-gray-100 text-[#8E8E93] py-4 md:py-5 rounded-[1.2rem] md:rounded-[1.5rem] font-bold flex items-center justify-center gap-3 ios-button text-base md:text-lg"
+                      >
+                        <RefreshCw size={24} /> Start Over
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
