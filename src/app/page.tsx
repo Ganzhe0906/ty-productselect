@@ -465,6 +465,7 @@ export default function Home() {
     setLocalizeStatus('正在生成带图结果，请稍候...');
     
     try {
+      console.log(`准备导出 ${productsToExport.length} 个商品...`);
       const response = await fetch('/api/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -475,7 +476,20 @@ export default function Home() {
         }),
       });
 
-      if (!response.ok) throw new Error('导出失败');
+      const contentType = response.headers.get('content-type');
+      if (contentType && (contentType.includes('application/json') || !response.ok)) {
+          const text = await response.text();
+          try {
+              const json = JSON.parse(text);
+              throw new Error(json.error || '导出失败');
+          } catch (e) {
+              // 如果不是 JSON，可能是 HTML 错误页或其他
+              console.error('Export failed with non-json response:', text.substring(0, 200));
+              throw new Error(`导出请求失败 (${response.status}): ${response.statusText}`);
+          }
+      }
+
+      if (!response.ok) throw new Error(`导出失败: ${response.status} ${response.statusText}`);
 
       const blob = await response.blob();
       

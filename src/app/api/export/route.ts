@@ -26,6 +26,8 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: 'No products to export' }, { status: 400 });
         }
 
+        console.log(`[Export] Starting export for ${rawProducts.length} products. LibraryId: ${libraryId}`);
+
         const products = rawProducts;
         const workbook = new ExcelJS.Workbook();
         let worksheet = workbook.addWorksheet('Liked Products');
@@ -33,26 +35,28 @@ export async function POST(req: NextRequest) {
 
         // 如果提供了 libraryId，尝试从 Blob 加载原始 Excel 作为模板
         if (libraryId) {
-            await initDb();
-            const lib = await getLibraryById(libraryId);
-            
-            let excelUrl = lib?.excel_url;
-            
-            // 如果是已完成库且没有 excelUrl（理论上不应该），尝试找原始库
-            if (!excelUrl && lib?.original_library_id) {
-                const originalLib = await getLibraryById(lib.original_library_id);
-                excelUrl = originalLib?.excel_url;
-            }
+            try {
+                await initDb();
+                const lib = await getLibraryById(libraryId);
+                
+                let excelUrl = lib?.excel_url;
+                
+                // 如果是已完成库且没有 excelUrl（理论上不应该），尝试找原始库
+                if (!excelUrl && lib?.original_library_id) {
+                    const originalLib = await getLibraryById(lib.original_library_id);
+                    excelUrl = originalLib?.excel_url;
+                }
 
-            if (excelUrl) {
-                try {
+                if (excelUrl) {
+                    console.log(`[Export] Loading source template from ${excelUrl}`);
                     const buffer = await downloadBuffer(excelUrl);
                     const sourceWorkbook = new ExcelJS.Workbook();
                     await sourceWorkbook.xlsx.load(buffer);
                     sourceSheet = sourceWorkbook.getWorksheet(1) || null;
-                } catch (err) {
-                    console.error('Failed to load original excel from blob:', err);
+                    console.log(`[Export] Source template loaded successfully`);
                 }
+            } catch (err) {
+                console.error('[Export] Failed to load original excel from blob:', err);
             }
         }
 
@@ -107,37 +111,62 @@ export async function POST(req: NextRequest) {
         headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
         headerRow.height = 30;
 
-        for (let i = 0; i < products.length; i++) {
-            const p = products[i];
+        // 并行处理图片和行数据
+        const CONCURRENCY = 5; // 控制并发数，避免请求过多
+        const results = [];
+        
+        console.log(`[Export] Processing rows with concurrency ${CONCURRENCY}...`);
+
+        for (let i = 0; i < products.length; i += CONCURRENCY) {
+            const chunk = products.slice(i, i + CONCURRENCY);
+            const chunkPromises = chunk.map(async (p, index) => {
+                const globalIndex = i + index;
+                const rowNum = globalIndex + 2; // 表头占一行
+
+                // 1. 确定图片路径 (Blob URL)
+                const imageUrl = p['主图src'] || p.src || '';
+
+                // 2. 构造行数据
+                let rowData: any[] = [];
+                let rowObject: any = {};
+                
+                if (sourceSheet && p._index) {
+                    const sourceRow = sourceSheet.getRow(p._index);
+                    sourceRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                        rowData[colNumber - 1] = cell.value;
+                    });
+                } else {
+                    keys.forEach((key, kIndex) => {
+                        const internalKey = worksheet.columns[kIndex].key!;
+                        rowObject[internalKey] = p[key];
+                    });
+                }
+
+                return { p, rowData, rowObject, imageUrl, rowNum };
+            });
+
+            const processedChunk = await Promise.all(chunkPromises);
             
-            // 1. 确定图片路径 (Blob URL)
-            const imageUrl = p['主图src'] || p.src || '';
+            for (const item of processedChunk) {
+                const { p, rowData, rowObject, imageUrl, rowNum } = item;
+                const newRow = rowData.length > 0 ? worksheet.addRow(rowData) : worksheet.addRow(rowObject);
+                newRow.height = 100;
+                newRow.alignment = { vertical: 'middle', horizontal: 'center' };
 
-            // 2. 构造行数据
-            let newRow: ExcelJS.Row;
-            if (sourceSheet && p._index) {
-                const sourceRow = sourceSheet.getRow(p._index);
-                const rowData: any[] = [];
-                sourceRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-                    rowData[colNumber - 1] = cell.value;
-                });
-                newRow = worksheet.addRow(rowData);
-            } else {
-                const exportData: any = {};
-                keys.forEach((key, index) => {
-                    const internalKey = worksheet.columns[index].key!;
-                    exportData[internalKey] = p[key];
-                });
-                newRow = worksheet.addRow(exportData);
+                // 处理图片嵌入 (这一步比较慢，我们也可以尝试并行下载图片，但插入必须是顺序的或通过 API 引用)
+                // 为了简单和稳定性，我们在添加完行后再异步下载图片并插入
             }
+        }
 
-            const rowNumber = newRow.number;
-
-            // 3. 处理图片嵌入
-            const firstCell = newRow.getCell(1);
+        // 再次循环处理图片 (并行下载)
+        console.log(`[Export] Downloading and embedding images...`);
+        const imageTasks = products.map(async (p, i) => {
+            const rowNumber = i + 2;
+            const imageUrl = p['主图src'] || p.src || '';
+            const firstCell = worksheet.getRow(rowNumber).getCell(1);
             let hasAddedImage = false;
 
-            // A. 尝试从原始 Excel 中提取图片 (最可靠)
+            // A. 尝试从原始 Excel 中提取图片
             if (sourceSheet && p._index) {
                 const images = sourceSheet.getImages();
                 const originalImage = images.find(img => 
@@ -163,12 +192,12 @@ export async function POST(req: NextRequest) {
                             firstCell.value = ' '; 
                         }
                     } catch (err) {
-                        console.error('Failed to copy image from original excel:', err);
+                        // console.error('Failed to copy image from original excel:', err);
                     }
                 }
             }
 
-            // B. 如果没有从原始 Excel 获取到图片，尝试下载图片 URL
+            // B. 尝试下载图片 URL
             if (!hasAddedImage && imageUrl && imageUrl.startsWith('http')) {
                 try {
                     const imageBuffer = await downloadBuffer(imageUrl);
@@ -191,19 +220,24 @@ export async function POST(req: NextRequest) {
                     hasAddedImage = true;
                     firstCell.value = ' '; 
                 } catch (e: any) {
-                    console.error(`导出图片失败: ${e.message}`);
+                    // console.error(`导出图片失败: ${e.message}`);
                 }
             }
 
             if (!hasAddedImage) {
                 firstCell.value = imageUrl ? '图片加载失败' : '无图片';
             }
+        });
 
-            newRow.height = 100;
-            newRow.alignment = { vertical: 'middle', horizontal: 'center' };
+        // 限制并发下载图片
+        for (let i = 0; i < imageTasks.length; i += 10) {
+            await Promise.all(imageTasks.slice(i, i + 10));
+            console.log(`[Export] Image download progress: ${Math.min(i + 10, imageTasks.length)}/${imageTasks.length}`);
         }
 
+        console.log(`[Export] Writing workbook to buffer...`);
         const outBuffer = await workbook.xlsx.writeBuffer();
+        console.log(`[Export] Workbook buffer size: ${outBuffer.byteLength} bytes`);
 
         return new NextResponse(outBuffer, {
             status: 200,
@@ -214,7 +248,7 @@ export async function POST(req: NextRequest) {
         });
 
     } catch (error: any) {
-        console.error('Export error:', error);
+        console.error('[Export] Critical error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }
