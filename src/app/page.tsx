@@ -883,7 +883,7 @@ export default function Home() {
             )}
 
             {/* 3. Main Content (Selection or Finished) */}
-            {view === 'home' && products.length > 0 && (
+            {view === 'home' && (products.length > 0 || isFinished) && (
               <motion.div 
                 key="home-content"
                 initial={{ opacity: 0 }}
@@ -936,12 +936,14 @@ export default function Home() {
                         />
                       )}
                       {/* Active Card */}
-                      <ProductCard 
-                        key={currentIndex}
-                        product={products[currentIndex]} 
-                        onSwipe={handleSwipe} 
-                        isTop={true} 
-                      />
+                      {products[currentIndex] && (
+                        <ProductCard 
+                          key={currentIndex}
+                          product={products[currentIndex]} 
+                          onSwipe={handleSwipe} 
+                          isTop={true} 
+                        />
+                      )}
                     </div>
 
                     {/* Shortcuts / Info */}
