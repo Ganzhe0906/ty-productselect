@@ -1,9 +1,9 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { motion, PanInfo, useMotionValue, useTransform } from 'framer-motion';
 import { Product } from '@/lib/excel';
-import { Heart, X, ShoppingBag, Users, Eye } from 'lucide-react';
+import { Heart, X, ShoppingBag, Users, Eye, Loader2 } from 'lucide-react';
 
 interface ProductCardProps {
   product: Product;
@@ -12,6 +12,7 @@ interface ProductCardProps {
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTop }) => {
+  const [isImageLoading, setIsImageLoading] = useState(true);
   const x = useMotionValue(0);
   const y = useMotionValue(0);
   const rotate = useTransform(x, [-200, 200], [-10, 10]);
@@ -76,13 +77,21 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
       {/* 左侧/顶部：大图展示 */}
       <div className="h-[40%] md:h-full md:w-[55%] bg-white relative p-2 md:p-4 flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-gray-100/30">
         <div className="relative w-full h-full flex items-center justify-center">
+          {isImageLoading && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-50/50 rounded-xl z-10">
+              <Loader2 size={32} className="text-[#007AFF] animate-spin mb-2" />
+              <span className="text-[10px] font-bold text-[#8E8E93] uppercase tracking-widest">Loading Image...</span>
+            </div>
+          )}
           <img
             src={getImageUrl(product)}
             alt={product['商品标题']}
-            className="w-full h-full object-contain rounded-xl shadow-sm"
+            className={`w-full h-full object-contain rounded-xl shadow-sm transition-opacity duration-300 ${isImageLoading ? 'opacity-0' : 'opacity-100'}`}
             draggable={false}
             referrerPolicy="no-referrer"
+            onLoad={() => setIsImageLoading(false)}
             onError={(e) => {
+              setIsImageLoading(false);
               const target = e.target as HTMLImageElement;
               target.src = 'https://placehold.co/600x600/F2F2F7/8E8E93?text=Image+Load+Failed';
             }}

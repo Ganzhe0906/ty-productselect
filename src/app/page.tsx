@@ -50,6 +50,7 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [view, setView] = useState<'home' | 'pending' | 'completed'>('home');
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
+  const [isLibraryLoading, setIsLibraryLoading] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [isImportingToLibrary, setIsImportingToLibrary] = useState(false);
   const [currentFileName, setCurrentFileName] = useState<string>('');
@@ -124,11 +125,26 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (view === 'pending') {
-      getPendingLibrary().then(setLibraryItems);
-    } else if (view === 'completed') {
-      getCompletedLibrary().then(setLibraryItems);
-    }
+    const fetchLibrary = async () => {
+      if (view === 'pending') {
+        setIsLibraryLoading(true);
+        try {
+          const items = await getPendingLibrary();
+          setLibraryItems(items);
+        } finally {
+          setIsLibraryLoading(false);
+        }
+      } else if (view === 'completed') {
+        setIsLibraryLoading(true);
+        try {
+          const items = await getCompletedLibrary();
+          setLibraryItems(items);
+        } finally {
+          setIsLibraryLoading(false);
+        }
+      }
+    };
+    fetchLibrary();
   }, [view]);
 
   // Save settings to localStorage
@@ -580,8 +596,13 @@ export default function Home() {
                   <div className="w-10" /> {/* Spacer */}
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-3 pr-2">
-                  {libraryItems.length === 0 ? (
+                <div className="flex-1 overflow-y-auto space-y-3 pr-2 relative">
+                  {isLibraryLoading ? (
+                    <div className="flex flex-col items-center justify-center h-full">
+                      <Loader2 size={40} className="text-[#007AFF] animate-spin mb-4" />
+                      <p className="text-[#8E8E93] font-medium">正在加载库文件...</p>
+                    </div>
+                  ) : libraryItems.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-[#8E8E93]">
                       <Library size={48} className="mb-4 opacity-20" />
                       <p>暂无数据</p>
@@ -634,12 +655,19 @@ export default function Home() {
                           <button
                             onClick={async () => {
                               if (confirm('确定要删除吗？')) {
-                                if (view === 'pending') {
-                                  await deletePendingItem(item.id);
-                                  getPendingLibrary().then(setLibraryItems);
-                                } else {
-                                  await deleteCompletedItem(item.id);
-                                  getCompletedLibrary().then(setLibraryItems);
+                                setIsLibraryLoading(true);
+                                try {
+                                  if (view === 'pending') {
+                                    await deletePendingItem(item.id);
+                                    const items = await getPendingLibrary();
+                                    setLibraryItems(items);
+                                  } else {
+                                    await deleteCompletedItem(item.id);
+                                    const items = await getCompletedLibrary();
+                                    setLibraryItems(items);
+                                  }
+                                } finally {
+                                  setIsLibraryLoading(false);
                                 }
                               }
                             }}
