@@ -387,18 +387,22 @@ export default function Home() {
     if (currentIndex < products.length - 1) {
       setCurrentIndex(prev => prev + 1);
     } else {
+      console.log('Selection finished, setting isFinished to true');
       setIsFinished(true);
     }
   }, [currentIndex, products]);
 
   // Handle auto-save when finished
   useEffect(() => {
-    if (isFinished && likedProducts.length > 0) {
-      saveToCompleted(currentFileName || '未命名选品', likedProducts, currentLibraryId || undefined)
-        .then(() => console.log('Saved to completed library'))
-        .catch(err => console.error('Failed to save to completed library:', err));
+    if (isFinished) {
+      console.log('isFinished changed to true, likedProducts:', likedProducts.length);
+      if (likedProducts.length > 0) {
+        saveToCompleted(currentFileName || '未命名选品', likedProducts, currentLibraryId || undefined)
+          .then(() => console.log('Saved to completed library'))
+          .catch(err => console.error('Failed to save to completed library:', err));
+      }
     }
-  }, [isFinished]);
+  }, [isFinished, likedProducts, currentFileName, currentLibraryId]);
 
   const handleBack = useCallback(() => {
     if (currentIndex > 0) {
@@ -550,7 +554,7 @@ export default function Home() {
 
         {/* Main Content Area - Expanded */}
         <div className="flex-1 relative mb-2 overflow-hidden">
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             {/* Library View */}
             {view !== 'home' && (
               <motion.div
@@ -653,7 +657,7 @@ export default function Home() {
             )}
 
             {/* 1. Initial Upload State */}
-            {view === 'home' && products.length === 0 && !isLoading && (
+            {view === 'home' && products.length === 0 && !isFinished && (
               <motion.div
                 key="initial"
                 initial={{ opacity: 0, y: 20 }}
@@ -879,7 +883,7 @@ export default function Home() {
             )}
 
             {/* 3. Selection State */}
-            {view === 'home' && products.length > 0 && !isFinished && !isLoading && (
+            {view === 'home' && products.length > 0 && !isFinished && (
               <motion.div 
                 key="selection"
                 initial={{ opacity: 0 }}
