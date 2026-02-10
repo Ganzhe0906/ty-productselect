@@ -81,6 +81,8 @@ export default function Home() {
     batchIndex: number;
     totalBatches: number;
     message: string;
+    retryCount: number;
+    countdown: number;
     retryAction: () => void;
     abortAction: () => void;
   } | null>(null);
@@ -239,6 +241,30 @@ export default function Home() {
     fetchLibrary();
   }, [fetchLibrary]);
 
+  // Scheduler countdown logic
+  useEffect(() => {
+    if (!schedulerError || schedulerError.countdown <= 0) return;
+
+    const timer = setInterval(() => {
+      setSchedulerError(prev => {
+        if (!prev || prev.countdown <= 0) {
+          clearInterval(timer);
+          return prev;
+        }
+        
+        const newCountdown = prev.countdown - 1;
+        if (newCountdown === 0) {
+          // 自动触发重试
+          prev.retryAction();
+        }
+        
+        return { ...prev, countdown: newCountdown };
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [schedulerError]);
+
   // Save settings to localStorage
   const saveSettings = (key: string, model: string) => {
     setGeminiApiKey(key);
@@ -322,6 +348,8 @@ export default function Home() {
         const titles = currentBatch.map(d => d[titleField]).filter(Boolean);
 
         let success = false;
+        let currentRetryCount = 0;
+
         while (!success) {
           try {
             setLocalizeStatus(`🤖 正在分析第 ${batchIndex}/${totalBatches} 批商品名...`);
@@ -347,7 +375,7 @@ export default function Home() {
             });
             success = true;
           } catch (err: any) {
-            console.error(`Batch ${batchIndex} failed:`, err);
+            console.error(`Batch ${batchIndex} failed (Retry: ${currentRetryCount}):`, err);
             
             // 等待用户决策
             const decision = await new Promise<'retry' | 'abort'>((resolve) => {
@@ -355,6 +383,8 @@ export default function Home() {
                 batchIndex,
                 totalBatches,
                 message: err.message,
+                retryCount: currentRetryCount,
+                countdown: currentRetryCount < 3 ? 10 : 0, // 仅在前 3 次显示倒计时
                 retryAction: () => resolve('retry'),
                 abortAction: () => resolve('abort')
               });
@@ -364,7 +394,9 @@ export default function Home() {
             if (decision === 'abort') {
               throw new Error('用户取消了任务');
             }
-            // If retry, the loop continues and tries again
+            
+            currentRetryCount++;
+            // 如果重试，循环会继续
           }
         }
       }
@@ -1526,6 +1558,9 @@ export default function Home() {
                   <h3 className="text-2xl font-black text-black mb-2 tracking-tight">AI 处理中断</h3>
                   <p className="text-[#8E8E93] text-sm mb-1 leading-relaxed">
                     在处理第 <span className="text-black font-bold">{schedulerError.batchIndex}/{schedulerError.totalBatches}</span> 批商品时遇到了问题。
+                    {schedulerError.retryCount > 0 && (
+                      <span className="ml-2 text-orange-500 font-bold">(已重试 {schedulerError.retryCount} 次)</span>
+                    )}
                   </p>
                   <div className="bg-red-50 border border-red-100 p-4 rounded-2xl mt-4">
                     <p className="text-red-600 text-xs font-medium break-words leading-relaxed">
@@ -1538,7 +1573,10 @@ export default function Home() {
                     onClick={schedulerError.retryAction}
                     className="w-full bg-[#007AFF] text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-2"
                   >
-                    <RefreshCw size={18} /> 重试这一批
+                    <RefreshCw size={18} className={schedulerError.countdown > 0 ? 'animate-spin' : ''} />
+                    {schedulerError.countdown > 0 
+                      ? `自动重试 (${schedulerError.countdown}s)` 
+                      : '重试这一批'}
                   </button>
                   <button
                     onClick={schedulerError.abortAction}
