@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import crypto from 'crypto';
-import { initDb, getLibraries, saveLibrary, deleteLibrary, getLibraryById } from '@/lib/db';
+import { initDb, getLibraries, saveLibrary, deleteLibrary, getLibraryById, updateLibraryName } from '@/lib/db';
 import { uploadToBlob, deleteFromBlob } from '@/lib/blob-utils';
 
 const FIELD_MAP: Record<string, string[]> = {
@@ -21,19 +21,60 @@ const FIELD_MAP: Record<string, string[]> = {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const type = (searchParams.get('type') as 'pending' | 'completed') || 'pending';
+  const id = searchParams.get('id');
 
   try {
     await initDb();
+
+    // If ID is provided, return full detail for a single library
+    if (id) {
+      const lib = await getLibraryById(id);
+      if (!lib) return NextResponse.json({ error: 'Library not found' }, { status: 404 });
+      
+      return NextResponse.json({
+        id: lib.id,
+        name: lib.name,
+        timestamp: Number(lib.timestamp),
+        products: lib.products,
+        excelUrl: lib.excel_url,
+        originalLibraryId: lib.original_library_id
+      });
+    }
+
+    // Otherwise return list of libraries (optimized)
     const libraries = await getLibraries(type);
     
+    // If fetching pending, also find who has completed them
+    let completionMap: Record<string, string[]> = {};
+    if (type === 'pending') {
+      const allCompleted = await getLibraries('completed');
+      allCompleted.forEach(comp => {
+        if (comp.original_library_id && comp.created_by) {
+          if (!completionMap[comp.original_library_id]) {
+            completionMap[comp.original_library_id] = [];
+          }
+          if (!completionMap[comp.original_library_id].includes(comp.created_by)) {
+            completionMap[comp.original_library_id].push(comp.created_by);
+          }
+        }
+      });
+    }
+
     // Map database rows to the format expected by the frontend
+    // Optimization: In list view, we don't need the full products array which can be huge.
+    // We only return the count to save bandwidth and prevent fetch errors.
     const items = libraries.map(lib => ({
       id: lib.id,
       name: lib.name,
-      timestamp: Number(lib.timestamp),
-      products: lib.products,
-      excelUrl: lib.excel_url,
-      originalLibraryId: lib.original_library_id
+      timestamp: lib.timestamp ? Number(lib.timestamp) : Date.now(),
+      // If we are just listing libraries, we don't need all products.
+      // But we need to keep the structure compatible.
+      // We return an empty array or a very small sample if it's a list request.
+      products: Array.isArray(lib.products) ? (lib.products.length > 0 ? [lib.products[0]] : []) : [],
+      productCount: Array.isArray(lib.products) ? lib.products.length : 0,
+      excelUrl: lib.excel_url || '',
+      originalLibraryId: lib.original_library_id || null,
+      completedBy: completionMap[lib.id] || []
     }));
 
     return NextResponse.json(items);
@@ -213,6 +254,23 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (error: any) {
     console.error('Delete library error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    await initDb();
+    const { id, name } = await req.json();
+    
+    if (!id || !name) {
+      return NextResponse.json({ error: 'Missing id or name' }, { status: 400 });
+    }
+
+    await updateLibraryName(id, name);
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error('Update library name error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

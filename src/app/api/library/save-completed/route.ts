@@ -23,7 +23,7 @@ async function downloadImageBuffer(url: string): Promise<Buffer | null> {
 export async function POST(req: NextRequest) {
     try {
         await initDb();
-        const { name, products, originalLibraryId } = await req.json();
+        const { name, products, originalLibraryId, createdBy } = await req.json();
         if (!products || products.length === 0) {
             return NextResponse.json({ error: 'No products' }, { status: 400 });
         }
@@ -79,7 +79,8 @@ export async function POST(req: NextRequest) {
             timestamp: Date.now(),
             excel_url: excelUrl,
             products,
-            original_library_id: originalLibraryId
+            original_library_id: originalLibraryId,
+            created_by: createdBy
         };
         await saveLibrary(metadata);
 

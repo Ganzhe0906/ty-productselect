@@ -4,9 +4,11 @@ export interface LibraryItem {
   id: string;
   name: string;
   products: Product[];
+  productCount?: number;
   timestamp: number;
   excelUrl?: string;
   originalLibraryId?: string;
+  completedBy?: string[];
 }
 
 export const saveToPending = async (name: string, products: Product[]) => {
@@ -16,16 +18,14 @@ export const saveToPending = async (name: string, products: Product[]) => {
   console.log('saveToPending called with products, but we prefer file upload now.');
 };
 
-export const saveToCompleted = async (name: string, products: Product[], originalLibraryId?: string) => {
-  // Similarly, for completed, we could send the products to the server
-  // to be saved as a new Excel file if needed.
-  // For now, let's implement a simple save via API.
+export const saveToCompleted = async (name: string, products: Product[], originalLibraryId?: string, createdBy?: string) => {
   const response = await fetch('/api/library/save-completed', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, products, originalLibraryId }),
+    body: JSON.stringify({ name, products, originalLibraryId, createdBy }),
   });
   if (!response.ok) throw new Error('Failed to save to completed library');
+  return response.json();
 };
 
 export const getPendingLibrary = async (): Promise<LibraryItem[]> => {
@@ -37,6 +37,12 @@ export const getPendingLibrary = async (): Promise<LibraryItem[]> => {
 export const getCompletedLibrary = async (): Promise<LibraryItem[]> => {
   const response = await fetch('/api/library?type=completed');
   if (!response.ok) throw new Error('Failed to fetch completed library');
+  return response.json();
+};
+
+export const getLibraryDetail = async (id: string): Promise<LibraryItem> => {
+  const response = await fetch(`/api/library?id=${id}`);
+  if (!response.ok) throw new Error('Failed to fetch library detail');
   return response.json();
 };
 
@@ -52,4 +58,13 @@ export const deleteCompletedItem = async (id: string) => {
     method: 'DELETE',
   });
   if (!response.ok) throw new Error('Failed to delete completed item');
+};
+
+export const renameLibrary = async (id: string, name: string) => {
+  const response = await fetch('/api/library', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, name }),
+  });
+  if (!response.ok) throw new Error('Failed to rename library');
 };

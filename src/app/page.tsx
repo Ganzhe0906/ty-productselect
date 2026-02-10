@@ -3,9 +3,15 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Product, exportToExcel } from '@/lib/excel';
 import { ProductCard } from '@/components/ProductCard';
-import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check, X, Loader2, Archive, Library, Trash2 } from 'lucide-react';
+import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check, X, Loader2, Archive, Library, Trash2, Edit2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { saveToPending, saveToCompleted, getPendingLibrary, getCompletedLibrary, deletePendingItem, deleteCompletedItem, LibraryItem } from '@/lib/storage';
+import { saveToPending, saveToCompleted, getPendingLibrary, getCompletedLibrary, deletePendingItem, deleteCompletedItem, LibraryItem, getLibraryDetail, renameLibrary } from '@/lib/storage';
+
+// 静态账户配置
+const USERS = {
+  'flz': '19960206',
+  'lyy': '19980407'
+};
 
 // 添加 Debug 类型定义
 interface DebugStep {
@@ -48,6 +54,13 @@ export default function Home() {
   const [debugResult, setDebugResult] = useState<DebugResult | null>(null);
   const [isDebugLoading, setIsDebugLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  // Auth states
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
   const [view, setView] = useState<'home' | 'pending' | 'completed'>('home');
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [isLibraryLoading, setIsLibraryLoading] = useState(false);
@@ -57,6 +70,10 @@ export default function Home() {
   const [currentLibraryId, setCurrentLibraryId] = useState<string | null>(null);
   const [currentLibraryType, setCurrentLibraryType] = useState<'pending' | 'completed' | null>(null);
   const mainRef = useRef<HTMLElement>(null);
+
+  // Editing state for renaming
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
 
   // Scroll to top when view changes
   useEffect(() => {
@@ -82,7 +99,54 @@ export default function Home() {
         console.error('Failed to parse history:', e);
       }
     }
+
+    // Check login state
+    const savedUser = localStorage.getItem('app_user');
+    if (savedUser) {
+      setCurrentUser(savedUser);
+    }
   }, []);
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    const password = USERS[loginUsername as keyof typeof USERS];
+    if (password && password === loginPassword) {
+      setCurrentUser(loginUsername);
+      localStorage.setItem('app_user', loginUsername);
+      setAuthError(null);
+    } else {
+      setAuthError('账号或密码错误');
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('app_user');
+    setLoginUsername('');
+    setLoginPassword('');
+  };
+
+  const handleRename = async (id: string, newName: string) => {
+    if (editingId !== id) return; // Prevent double calls from onBlur + Enter
+    
+    if (!newName.trim() || newName === libraryItems.find(i => i.id === id)?.name) {
+      setEditingId(null);
+      return;
+    }
+
+    setIsLibraryLoading(true);
+    try {
+      await renameLibrary(id, newName);
+      // Refresh library
+      const items = view === 'pending' ? await getPendingLibrary() : await getCompletedLibrary();
+      setLibraryItems(items);
+      setEditingId(null);
+    } catch (err: any) {
+      alert('重命名失败: ' + err.message);
+    } finally {
+      setIsLibraryLoading(false);
+    }
+  };
 
   const saveToHistory = () => {
      const now = new Date();
@@ -410,15 +474,24 @@ export default function Home() {
 
   // Handle auto-save when finished
   useEffect(() => {
-    if (isFinished) {
-      console.log('isFinished changed to true, likedProducts:', likedProducts.length);
-      if (likedProducts.length > 0) {
-        saveToCompleted(currentFileName || '未命名选品', likedProducts, currentLibraryId || undefined)
-          .then(() => console.log('Saved to completed library'))
-          .catch(err => console.error('Failed to save to completed library:', err));
+    const autoSave = async () => {
+      if (isFinished && likedProducts.length > 0 && !isSaving) {
+        setIsSaving(true);
+        try {
+          const completedName = `${(currentFileName || '未命名选品').replace('.xlsx', '')}_${currentUser || '未知'}`;
+          await saveToCompleted(completedName, likedProducts, currentLibraryId || undefined, currentUser || undefined);
+          console.log('Saved to completed library');
+        } catch (err) {
+          console.error('Failed to save to completed library:', err);
+          alert('保存选品结果失败，请尝试手动导出或重新进入。');
+        } finally {
+          setIsSaving(false);
+        }
       }
-    }
-  }, [isFinished, likedProducts, currentFileName, currentLibraryId]);
+    };
+    
+    autoSave();
+  }, [isFinished, likedProducts, currentFileName, currentLibraryId, currentUser]);
 
   const handleBack = useCallback(() => {
     if (currentIndex > 0) {
@@ -529,8 +602,16 @@ export default function Home() {
   const handleExport = async () => {
     const dateStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '');
     // 如果已经在完成选品界面，后缀固定为“已完成”
-    const suffix = isFinished || currentLibraryType === 'completed' ? '已完成' : '待完成';
-    const fileName = `${currentFileName.replace('.xlsx', '')}_${suffix}_${dateStr}.xlsx`;
+    const isCompleted = isFinished || currentLibraryType === 'completed';
+    const suffix = isCompleted ? '已完成' : '待完成';
+    
+    let baseName = currentFileName.replace('.xlsx', '');
+    // 如果是完成状态，且名字里还没带选品人，则加上选品人
+    if (isCompleted && currentUser && !baseName.endsWith(`_${currentUser}`)) {
+      baseName = `${baseName}_${currentUser}`;
+    }
+    
+    const fileName = `${baseName}_${suffix}_${dateStr}.xlsx`;
     await performExport(likedProducts, fileName, currentLibraryId || undefined, currentLibraryType || undefined);
   };
 
@@ -547,6 +628,8 @@ export default function Home() {
     setLocalizeProgress(0);
     setDebugResult(null);
     setIsDebugLoading(false);
+    setIsLoading(false);
+    setIsLibraryLoading(false);
     setCurrentFileName('');
   };
 
@@ -559,32 +642,111 @@ export default function Home() {
       ref={mainRef}
       className="h-screen flex flex-col items-center justify-start p-2 md:p-4 bg-[#F2F2F7] overflow-hidden"
     >
-      <div className="w-full max-w-6xl flex flex-col py-2 h-full">
-        
-        {/* iOS Style Header - More Compact */}
-        <div className="mb-3 md:mb-4 flex justify-between items-center px-2 md:px-4">
-          <div className="flex items-baseline gap-2">
-            <h1 className="text-xl md:text-2xl font-black text-black tracking-tight">
-              Product<span className="text-[#007AFF]">Select</span>
-            </h1>
-            <p className="text-[#8E8E93] font-medium text-[10px] md:text-xs">iOS 26 High-Speed Selection</p>
-          </div>
-          {view === 'home' && products.length > 0 && !isFinished && (
-            <div className="flex items-center gap-4">
-              <div className="text-right">
-                <div className="text-[10px] md:text-xs font-bold text-black">{currentIndex + 1} <span className="text-[#8E8E93]">/ {products.length}</span></div>
-                <div className="text-[8px] md:text-[9px] font-bold text-[#34C759] uppercase tracking-widest">Liked: {likedProducts.length}</div>
+      <AnimatePresence mode="wait">
+        {!currentUser ? (
+          <motion.div
+            key="login"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 1.05 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-[#F2F2F7] p-6"
+          >
+            <div className="w-full max-w-sm space-y-8 text-center">
+              <div className="space-y-2">
+                <h1 className="text-3xl font-black text-black tracking-tight">
+                  滑动式<span className="text-[#007AFF]">选品平台</span>
+                </h1>
+                <p className="text-[#8E8E93] font-medium">请登录以继续</p>
               </div>
-              <button onClick={reset} className="p-1.5 hover:bg-gray-200 rounded-full transition-colors text-gray-400">
-                <RefreshCw size={14} />
-              </button>
-            </div>
-          )}
-        </div>
 
-        {/* Main Content Area - Expanded */}
-        <div className="flex-1 relative mb-2 overflow-hidden">
-          <AnimatePresence>
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    placeholder="账号"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    className="w-full px-5 py-4 bg-white border border-gray-200 rounded-2xl shadow-sm focus:outline-none focus:ring-2 focus:ring-[#007AFF] transition-all text-black font-medium"
+                    required
+                  />
+                  <input
+                    type="password"
+                    placeholder="密码"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full px-5 py-4 bg-white border border-gray-200 rounded-2xl shadow-sm focus:outline-none focus:ring-2 focus:ring-[#007AFF] transition-all text-black font-medium"
+                    required
+                  />
+                </div>
+
+                {authError && (
+                  <motion.p 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-[#FF3B30] text-sm font-bold"
+                  >
+                    {authError}
+                  </motion.p>
+                )}
+
+                <button
+                  type="submit"
+                  className="w-full bg-[#007AFF] text-white py-4 rounded-2xl font-bold text-lg shadow-xl shadow-blue-500/20 active:scale-[0.98] transition-all"
+                >
+                  登录
+                </button>
+              </form>
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div 
+            key="app"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="w-full max-w-6xl flex flex-col py-2 h-full"
+          >
+            {/* iOS Style Header - More Compact */}
+            <div className="mb-3 md:mb-4 flex justify-between items-center px-2 md:px-4">
+              <div className="flex items-baseline gap-2">
+                <h1 className="text-xl md:text-2xl font-black text-black tracking-tight">
+                  滑动式<span className="text-[#007AFF]">选品平台</span>
+                </h1>
+                <p className="text-[#8E8E93] font-medium text-[10px] md:text-xs">极速选品体验</p>
+              </div>
+              
+              <div className="flex items-center gap-3">
+                {view === 'home' && products.length > 0 && !isFinished && (
+                  <div className="flex items-center gap-3 mr-2">
+                    <div className="text-right">
+                      <div className="text-[10px] md:text-xs font-bold text-black">{currentIndex + 1} <span className="text-[#8E8E93]">/ {products.length}</span></div>
+                      <div className="text-[8px] md:text-[9px] font-bold text-[#34C759] uppercase tracking-widest">Liked: {likedProducts.length}</div>
+                    </div>
+                    <button onClick={reset} className="p-1.5 hover:bg-gray-200 rounded-full transition-colors text-gray-400">
+                      <RefreshCw size={14} />
+                    </button>
+                  </div>
+                )}
+                
+                {/* User Profile */}
+                <div className="flex items-center gap-3 pl-3 border-l border-gray-200">
+                  <div className="text-right hidden sm:block">
+                    <div className="text-[10px] font-bold text-black uppercase">{currentUser}</div>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      if (confirm('确定要退出登录吗？')) handleLogout();
+                    }}
+                    className="w-8 h-8 md:w-10 md:h-10 bg-[#007AFF] text-white rounded-full flex items-center justify-center font-black text-xs md:text-sm shadow-lg shadow-blue-500/20 active:scale-90 transition-transform"
+                  >
+                    {currentUser.substring(0, 3).toUpperCase()}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Content Area - Expanded */}
+            <div className="flex-1 relative mb-2 overflow-hidden">
+              <AnimatePresence>
             {/* Library View */}
             {view !== 'home' && (
               <motion.div
@@ -598,7 +760,7 @@ export default function Home() {
                   <button 
                     onClick={() => {
                       setView('home');
-                      reset();
+                      // 不再在这里立即 reset，避免动画过程中数据丢失
                     }}
                     className="p-2 hover:bg-gray-100 rounded-full transition-colors"
                   >
@@ -628,25 +790,109 @@ export default function Home() {
                         className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between group hover:border-blue-200 transition-colors"
                       >
                         <div className="flex-1 min-w-0 mr-4">
-                          <h3 className="font-bold text-black truncate">{item.name}</h3>
+                          <div className="flex items-center gap-2 group/name">
+                            {editingId === item.id ? (
+                              <div className="flex items-center gap-2 flex-1">
+                                <input
+                                  autoFocus
+                                  type="text"
+                                  value={editingName}
+                                  onChange={(e) => setEditingName(e.target.value)}
+                                  onBlur={() => handleRename(item.id, editingName)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleRename(item.id, editingName);
+                                    if (e.key === 'Escape') setEditingId(null);
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="flex-1 px-2 py-1 bg-blue-50 border border-blue-200 rounded-lg text-sm font-bold text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRename(item.id, editingName);
+                                  }}
+                                  className="p-1 text-green-500 hover:bg-green-50 rounded-md"
+                                >
+                                  <Check size={14} />
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <h3 className="font-bold text-black truncate">{item.name}</h3>
+                                <button 
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    setEditingId(item.id);
+                                    setEditingName(item.name);
+                                  }}
+                                  className="p-1 text-gray-400 hover:text-blue-500 opacity-0 group-hover/name:opacity-100 transition-opacity"
+                                >
+                                  <Edit2 size={12} />
+                                </button>
+                              </>
+                            )}
+                          </div>
                           <div className="flex items-center gap-3 text-[10px] text-[#8E8E93] mt-1">
                             <span className="bg-gray-100 px-2 py-0.5 rounded-md font-bold text-black">
-                              {item.products.length} Items
+                              {item.productCount ?? item.products.length} Items
                             </span>
                             <span>{new Date(item.timestamp).toLocaleString()}</span>
                           </div>
+
+                          {/* Collaboration Tags */}
+                          {view === 'pending' && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {(!item.completedBy || item.completedBy.length === 0) ? (
+                                <span className="px-2 py-0.5 bg-gray-100 text-gray-400 rounded-md text-[10px] font-bold border border-gray-200">
+                                  无人完成
+                                </span>
+                              ) : item.completedBy.length >= 2 ? (
+                                <span className="px-2 py-0.5 bg-green-50 text-green-600 rounded-md text-[10px] font-bold border border-green-100 flex items-center gap-1">
+                                  <Check size={10} /> 2人完成
+                                </span>
+                              ) : (
+                                <>
+                                  {/* Individual status for each user */}
+                                  {['flz', 'lyy'].map(u => {
+                                    const isDone = item.completedBy?.includes(u);
+                                    return (
+                                      <span 
+                                        key={u}
+                                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold border flex items-center gap-1 ${
+                                          isDone 
+                                            ? 'bg-blue-50 text-[#007AFF] border-blue-100' 
+                                            : 'bg-gray-50 text-gray-400 border-gray-100'
+                                        }`}
+                                      >
+                                        {isDone && <Check size={10} />}
+                                        {u.toUpperCase()} {isDone ? '已完成' : '待完成'}
+                                      </span>
+                                    );
+                                  })}
+                                </>
+                              )}
+                            </div>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           {view === 'pending' && (
                             <button
-                              onClick={() => {
-                                setProducts(item.products);
-                                setCurrentFileName(item.name);
-                                setCurrentLibraryId(item.id);
-                                setCurrentLibraryType('pending');
-                                setCurrentIndex(0);
-                                setLikedProducts([]);
-                                setView('home');
+                              onClick={async () => {
+                                setIsLibraryLoading(true);
+                                try {
+                                  const detail = await getLibraryDetail(item.id);
+                                  setProducts(detail.products);
+                                  setCurrentFileName(detail.name);
+                                  setCurrentLibraryId(detail.id);
+                                  setCurrentLibraryType('pending');
+                                  setCurrentIndex(0);
+                                  setLikedProducts([]);
+                                  setView('home');
+                                } catch (err: any) {
+                                  alert('加载详情失败: ' + err.message);
+                                } finally {
+                                  setIsLibraryLoading(false);
+                                }
                               }}
                               className="p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
                               title="开始选品"
@@ -655,11 +901,19 @@ export default function Home() {
                             </button>
                           )}
                           <button
-                            onClick={() => {
-                              const dateStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '');
-                              const suffix = view === 'completed' ? '已完成' : '待完成';
-                              const fileName = `${item.name.replace('.xlsx', '')}_${suffix}_${dateStr}.xlsx`;
-                              performExport(item.products, fileName, item.id, view as any);
+                            onClick={async () => {
+                              setIsLibraryLoading(true);
+                              try {
+                                const detail = await getLibraryDetail(item.id);
+                                const dateStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '');
+                                const suffix = view === 'completed' ? '已完成' : '待完成';
+                                 const fileName = `${detail.name.replace('.xlsx', '')}_${suffix}_${dateStr}.xlsx`;
+                                 await performExport(detail.products, fileName, detail.id, view as any);
+                               } catch (err: any) {
+                                alert('导出失败: ' + err.message);
+                              } finally {
+                                setIsLibraryLoading(false);
+                              }
                             }}
                             className="p-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors"
                             title="导出 Excel"
@@ -698,71 +952,132 @@ export default function Home() {
               </motion.div>
             )}
 
-            {/* 1. Initial Upload State */}
+            {/* 1. Initial State - Workflow Design */}
             {view === 'home' && products.length === 0 && !isFinished && (
               <motion.div
                 key="initial"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="absolute inset-0 ios-card bg-white/80 ios-blur flex flex-col items-center p-6 md:p-12 text-center overflow-y-auto custom-scrollbar"
+                className="absolute inset-0 flex flex-col items-center p-4 md:p-8 overflow-y-auto custom-scrollbar z-10"
               >
-                <div className="w-16 h-16 md:w-24 md:h-24 bg-[#007AFF]/10 rounded-[1.5rem] md:rounded-[2rem] flex items-center justify-center mb-6 md:mb-8 text-[#007AFF]">
-                  <Upload size={40} strokeWidth={2.5} />
-                </div>
-                <h2 className="text-2xl md:text-3xl font-bold text-black mb-3 md:mb-4 tracking-tight">Ready to Select?</h2>
-                
-                <p className="text-[#8E8E93] max-w-xs mx-auto text-base md:text-lg mb-8 md:mb-10 leading-relaxed">
-                  Import your Excel product list and start the high-speed selection process.
-                </p>
-                <div className="flex flex-col gap-3 md:gap-4 w-full max-w-sm mx-auto">
-                  <div className="grid grid-cols-2 gap-3">
-                    <button 
-                      onClick={() => setView('pending')}
-                      className="bg-white text-black border-2 border-black px-4 py-4 rounded-[1.2rem] font-bold ios-button shadow-lg text-sm flex items-center justify-center gap-2"
-                    >
-                      <Archive size={18} />
-                      待选品库
-                    </button>
-                    <button 
-                      onClick={() => setView('completed')}
-                      className="bg-white text-black border-2 border-black px-4 py-4 rounded-[1.2rem] font-bold ios-button shadow-lg text-sm flex items-center justify-center gap-2"
-                    >
-                      <Library size={18} />
-                      完成选品库
-                    </button>
+                <div className="w-full max-w-4xl space-y-8">
+                  {/* Management Section - NOW ON TOP */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-4 px-2">
+                      <Library size={20} className="text-[#007AFF]" />
+                      <h3 className="font-bold text-black text-sm uppercase tracking-wider">我的选品仓库</h3>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+                      <button 
+                        onClick={() => setView('pending')}
+                        className="ios-card bg-white p-6 md:p-8 flex items-center gap-6 hover:border-blue-200 transition-all group shadow-sm hover:shadow-md"
+                      >
+                        <div className="w-12 h-12 md:w-14 md:h-14 bg-blue-50 rounded-2xl flex items-center justify-center text-[#007AFF] group-hover:scale-110 transition-transform">
+                          <Archive size={28} />
+                        </div>
+                        <div className="text-left">
+                          <div className="font-bold text-black text-lg md:text-xl">待选品库</div>
+                          <p className="text-xs md:text-sm text-[#8E8E93] mt-1">管理已导入的原始数据</p>
+                        </div>
+                      </button>
+
+                      <button 
+                        onClick={() => setView('completed')}
+                        className="ios-card bg-white p-6 md:p-8 flex items-center gap-6 hover:border-green-200 transition-all group shadow-sm hover:shadow-md"
+                      >
+                        <div className="w-12 h-12 md:w-14 md:h-14 bg-green-50 rounded-2xl flex items-center justify-center text-[#34C759] group-hover:scale-110 transition-transform">
+                          <CheckCircle2 size={28} />
+                        </div>
+                        <div className="text-left">
+                          <div className="font-bold text-black text-lg md:text-xl">完成选品库</div>
+                          <p className="text-xs md:text-sm text-[#8E8E93] mt-1">查看已筛选导出的结果</p>
+                        </div>
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="h-px bg-gray-200 my-2" />
-                  
-                  <div className="flex flex-col gap-3">
-                    <label 
-                      htmlFor="localize-upload"
-                      className="bg-[#007AFF] text-white px-6 md:px-10 py-4 md:py-5 rounded-[1.2rem] md:rounded-[1.5rem] font-bold ios-button cursor-pointer shadow-2xl shadow-blue-500/20 text-base md:text-lg tracking-tight flex items-center justify-center gap-2"
-                    >
-                      <RefreshCw size={20} />
-                      新鲜网页转永久
-                    </label>
+                  {/* Workflow Section - NOW AT BOTTOM */}
+                  <div className="pt-8 border-t border-gray-100">
+                    <div className="flex items-center gap-2 mb-6 px-2">
+                      <RefreshCw size={18} className="text-[#8E8E93]" />
+                      <h3 className="font-bold text-[#8E8E93] text-sm uppercase tracking-wider">导入与数据处理</h3>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+                      {/* Step 1: Manual Prep */}
+                      <div className="ios-card bg-white/40 p-5 flex flex-col items-center text-center space-y-3 border-dashed border-2 border-gray-200 opacity-60">
+                        <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center text-gray-400">
+                          <span className="text-lg font-black">1</span>
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-black text-sm">采集准备</h3>
+                          <p className="text-[10px] text-[#8E8E93] mt-1 leading-relaxed">在出海匠扒下原始数据</p>
+                        </div>
+                        <div className="flex-1 flex items-end">
+                          <span className="text-[9px] font-bold text-gray-300 uppercase tracking-widest px-2 py-0.5 bg-gray-50 rounded-full">外部操作</span>
+                        </div>
+                      </div>
 
-                    <label 
-                      htmlFor="library-import"
-                      className="bg-white text-[#007AFF] border-2 border-[#007AFF] px-6 md:px-10 py-4 md:py-5 rounded-[1.2rem] md:rounded-[1.5rem] font-bold ios-button cursor-pointer shadow-xl text-base md:text-lg tracking-tight flex items-center justify-center gap-2"
-                    >
-                      <Upload size={20} />
-                      导入选品文件
-                      <input 
-                        id="library-import"
-                        type="file" 
-                        accept=".xlsx, .xls" 
-                        onChange={handleImportToLibrary} 
-                        className="hidden" 
-                      />
-                    </label>
+                      {/* Step 2: Localize */}
+                      <div className="ios-card bg-white p-5 flex flex-col items-center text-center space-y-3 shadow-sm border border-blue-50">
+                        <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-[#007AFF]">
+                          <span className="text-lg font-black">2</span>
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-black text-sm">网页转永久</h3>
+                          <p className="text-[10px] text-[#8E8E93] mt-1 leading-relaxed">固定图片，确保数据永久可用</p>
+                        </div>
+                        <div className="w-full">
+                          <label 
+                            htmlFor="localize-upload"
+                            className="block w-full bg-[#007AFF] text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/10 text-center"
+                          >
+                            开始转换
+                          </label>
+                          <input 
+                            id="localize-upload"
+                            type="file" 
+                            accept=".xlsx, .xls" 
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) processLocalize(file, true);
+                            }} 
+                            className="hidden" 
+                          />
+                        </div>
+                      </div>
+
+                      {/* Step 3: Import */}
+                      <div className="ios-card bg-white p-5 flex flex-col items-center text-center space-y-3 shadow-sm border border-green-50">
+                        <div className="w-10 h-10 bg-green-50 rounded-xl flex items-center justify-center text-[#34C759]">
+                          <span className="text-lg font-black">3</span>
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-black text-sm">导入系统</h3>
+                          <p className="text-[10px] text-[#8E8E93] mt-1 leading-relaxed">上传文件进入待选品库</p>
+                        </div>
+                        <div className="w-full">
+                          <label 
+                            htmlFor="library-import"
+                            className="block w-full bg-white text-[#34C759] border-2 border-[#34C759] py-2 rounded-xl font-bold text-xs cursor-pointer hover:bg-green-50 transition-colors text-center"
+                          >
+                            导入选品
+                          </label>
+                          <input 
+                            id="library-import"
+                            type="file" 
+                            accept=".xlsx, .xls" 
+                            onChange={handleImportToLibrary} 
+                            className="hidden" 
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   {/* History Records Section */}
                   {historyRecords.length > 0 && (
-                    <div className="mt-8 w-full">
+                    <div className="mt-12 pt-8 border-t border-gray-100 w-full">
                       <div className="flex items-center justify-between mb-4">
                         <h3 className="text-lg font-bold text-black flex items-center gap-2">
                           <Archive size={20} className="text-[#007AFF]" />
@@ -931,7 +1246,7 @@ export default function Home() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 flex flex-col"
+                className="absolute inset-0 flex flex-col z-10"
               >
                 {!isFinished ? (
                   <div className="flex-1 flex flex-col px-4">
@@ -1074,7 +1389,7 @@ export default function Home() {
 
         {/* 5. Global Loading Overlay - Moved out of the main container and AnimatePresence to ensure it never blocks clicks after loading */}
         {isLoading && (
-          <div className="fixed inset-0 flex flex-col items-center justify-center p-6 text-center z-[9999] bg-white/60 backdrop-blur-md">
+          <div className="fixed inset-0 flex flex-col items-center justify-center p-6 text-center z-[9999] bg-white/60 backdrop-blur-md pointer-events-auto">
             {!localizeStatus ? (
               <div className="flex flex-col items-center">
                 <div className="w-16 h-16 border-4 border-[#007AFF]/20 border-t-[#007AFF] rounded-full animate-spin mb-6" />
@@ -1109,7 +1424,28 @@ export default function Home() {
             )}
           </div>
         )}
-      </div>
+
+        {/* 6. Saving Overlay */}
+        {isSaving && (
+          <div className="fixed inset-0 flex flex-col items-center justify-center p-6 text-center z-[9999] bg-black/40 backdrop-blur-sm pointer-events-auto">
+            <div className="bg-white p-8 rounded-[2rem] shadow-2xl flex flex-col items-center space-y-4 max-w-xs w-full">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-blue-100 rounded-full" />
+                <div className="absolute top-0 left-0 w-16 h-16 border-4 border-[#007AFF] border-t-transparent rounded-full animate-spin" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Archive size={24} className="text-[#007AFF]" />
+                </div>
+              </div>
+              <div className="text-center">
+                <h3 className="text-lg font-bold text-black">正在保存结果</h3>
+                <p className="text-xs text-[#8E8E93] mt-1">正在将选品数据同步到服务器...</p>
+              </div>
+            </div>
+          </div>
+        )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </main>
   );
 }

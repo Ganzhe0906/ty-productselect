@@ -8,6 +8,7 @@ export interface LibraryRow {
   excel_url: string;
   products: any;
   original_library_id?: string;
+  created_by?: string;
 }
 
 export async function initDb() {
@@ -19,7 +20,8 @@ export async function initDb() {
       timestamp BIGINT NOT NULL,
       excel_url TEXT NOT NULL,
       products JSONB NOT NULL,
-      original_library_id UUID
+      original_library_id UUID,
+      created_by VARCHAR(50)
     );
   `;
 }
@@ -33,20 +35,25 @@ export async function getLibraries(type: 'pending' | 'completed') {
 
 export async function saveLibrary(library: LibraryRow) {
   await sql`
-    INSERT INTO libraries (id, name, type, timestamp, excel_url, products, original_library_id)
-    VALUES (${library.id}, ${library.name}, ${library.type}, ${library.timestamp}, ${library.excel_url}, ${JSON.stringify(library.products)}, ${library.original_library_id || null})
+    INSERT INTO libraries (id, name, type, timestamp, excel_url, products, original_library_id, created_by)
+    VALUES (${library.id}, ${library.name}, ${library.type}, ${library.timestamp}, ${library.excel_url}, ${JSON.stringify(library.products)}, ${library.original_library_id || null}, ${library.created_by || null})
     ON CONFLICT (id) DO UPDATE SET
       name = EXCLUDED.name,
       type = EXCLUDED.type,
       timestamp = EXCLUDED.timestamp,
       excel_url = EXCLUDED.excel_url,
       products = EXCLUDED.products,
-      original_library_id = EXCLUDED.original_library_id
+      original_library_id = EXCLUDED.original_library_id,
+      created_by = EXCLUDED.created_by
   `;
 }
 
 export async function deleteLibrary(id: string) {
   await sql`DELETE FROM libraries WHERE id = ${id}`;
+}
+
+export async function updateLibraryName(id: string, name: string) {
+  await sql`UPDATE libraries SET name = ${name} WHERE id = ${id}`;
 }
 
 export async function getLibraryById(id: string) {
