@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { motion, PanInfo, useMotionValue, useTransform } from 'framer-motion';
-import { Product } from '@/lib/excel';
+import { Product, getProductField } from '@/lib/excel';
 import { Heart, X, ShoppingBag, Users, Eye, Loader2 } from 'lucide-react';
 
 interface ProductCardProps {
@@ -41,15 +41,29 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
   };
 
   // 处理价格显示的辅助函数
-  const formatPrice = (price: string | number) => {
+  const formatPrice = (price: any) => {
+    if (price === undefined || price === null || String(price).trim() === '' || String(price) === 'undefined') {
+      return 'N/A';
+    }
     const p = String(price).trim();
-    if (!p) return 'N/A';
     // 如果已经包含货币符号，直接返回
     if (p.includes('$') || p.includes('¥')) return p;
     // 否则默认加 ¥
     return `¥${p}`;
   };
   
+  // 处理百分比显示的辅助函数
+  const formatPercent = (value: any) => {
+    if (value === undefined || value === null || String(value).trim() === '' || String(value) === 'undefined') {
+      return '0%';
+    }
+    const v = String(value).trim();
+    // 如果已经包含百分号，直接返回，不再额外添加
+    if (v.includes('%')) return v;
+    // 否则添加百分号
+    return `${v}%`;
+  };
+
   const handleDragEnd = (_: any, info: PanInfo) => {
     if (info.offset.x > 100) {
       onSwipe('right');
@@ -126,17 +140,17 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
           {/* 标题与翻译 */}
           <div className="space-y-1">
             <h2 className="text-sm md:text-lg font-bold text-gray-900 tracking-tight leading-tight md:leading-snug line-clamp-2">
-              {product['商品标题']}
+              {getProductField(product, '商品标题')}
             </h2>
             <div className="flex flex-wrap gap-1">
-              {product['中文商品名'] && (
+              {getProductField(product, '中文商品名') && (
                 <div className="inline-flex items-center px-2 py-1 rounded-md text-sm md:text-base font-black bg-blue-50 text-blue-600 border border-blue-100/50">
-                  {product['中文商品名']}
+                  {getProductField(product, '中文商品名')}
                 </div>
               )}
-              {product['场景用途'] && (
+              {getProductField(product, '场景用途') && (
                 <div className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] md:text-[11px] font-medium bg-purple-50 text-purple-600 border border-purple-100/50">
-                  {product['场景用途']}
+                  {getProductField(product, '场景用途')}
                 </div>
               )}
             </div>
@@ -149,15 +163,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
                 <ShoppingBag size={10} /> Current Price
               </span>
               <div className="font-black text-orange-700 text-lg md:text-2xl leading-none mt-0.5">
-                {formatPrice(product['商品售价'])}
+                {formatPrice(getProductField(product, '商品售价'))}
               </div>
             </div>
             <div className="text-right">
               <div className="text-[8px] md:text-[9px] font-bold text-orange-600/60 uppercase">
-                {Number(product['邮费']) === 0 ? 'Free Shipping' : `+ ¥${product['邮费']} Shipping`}
+                {Number(getProductField(product, '邮费')) === 0 ? 'Free Shipping' : `+ ¥${getProductField(product, '邮费')} Shipping`}
               </div>
               <div className="text-[10px] md:text-xs font-semibold text-orange-700/80 mt-0.5">
-                Rating: {product['评分']}
+                Rating: {getProductField(product, '评分')}
               </div>
             </div>
           </div>
@@ -166,32 +180,32 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-blue-50/40 p-2 md:p-2.5 rounded-xl border border-blue-100/50">
               <div className="text-blue-600 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5">7D Sales</div>
-              <div className="text-sm md:text-lg font-black text-blue-700">{product['近7天销量']}</div>
+              <div className="text-sm md:text-lg font-black text-blue-700">{getProductField(product, '近7天销量')}</div>
             </div>
             
             <div className="bg-purple-50/40 p-2 md:p-2.5 rounded-xl border border-purple-100/50">
               <div className="text-purple-600 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5">Total Sales</div>
-              <div className="text-sm md:text-lg font-black text-purple-700">{product['总销量']}</div>
+              <div className="text-sm md:text-lg font-black text-purple-700">{getProductField(product, '总销量')}</div>
             </div>
 
             <div className="bg-green-50/40 p-2 md:p-2.5 rounded-xl border border-green-100/50">
               <div className="text-green-600 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5">Influencers</div>
-              <div className="text-sm md:text-lg font-black text-green-700">{product['关联达人']}</div>
+              <div className="text-sm md:text-lg font-black text-green-700">{getProductField(product, '关联达人')}</div>
             </div>
 
             <div className="bg-gray-50/60 p-2 md:p-2.5 rounded-xl border border-gray-100">
               <div className="text-gray-500 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5">Conversion</div>
-              <div className="text-sm md:text-lg font-black text-gray-700">{product['达人出单率']}%</div>
+              <div className="text-sm md:text-lg font-black text-gray-700">{formatPercent(getProductField(product, '达人出单率'))}</div>
             </div>
           </div>
 
           {/* 次要信息 - 单行紧凑 */}
           <div className="flex items-center justify-between text-[10px] md:text-xs text-gray-400 pt-1 border-t border-gray-100/50">
             <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1"><Eye size={10} /> {product['视频曝光量']}</span>
-              <span className="flex items-center gap-1"><Users size={10} /> {product['关联视频']}</span>
+              <span className="flex items-center gap-1"><Eye size={10} /> {getProductField(product, '视频曝光量')}</span>
+              <span className="flex items-center gap-1"><Users size={10} /> {getProductField(product, '关联视频')}</span>
             </div>
-            <span className="truncate max-w-[100px] md:max-w-[150px] font-medium">{product['商店名称']}</span>
+            <span className="truncate max-w-[100px] md:max-w-[150px] font-medium">{getProductField(product, '商店名称')}</span>
           </div>
         </div>
 

@@ -4,19 +4,7 @@ import * as XLSX from 'xlsx';
 import crypto from 'crypto';
 import { initDb, getLibraries, saveLibrary, deleteLibrary, getLibraryById, updateLibraryName } from '@/lib/db';
 import { uploadToBlob, deleteFromBlob } from '@/lib/blob-utils';
-
-const FIELD_MAP: Record<string, string[]> = {
-  '商品标题': ['商品标题', '商品名'],
-  '商品售价': ['商品售价', '最低售价'],
-  '邮费': ['邮费', '物流费用'],
-  '评分': ['评分', '商品评分'],
-  '商店名称': ['商店名称', '店铺名'],
-  '店铺销量': ['店铺销量', '店铺总销量'],
-  '近7天销量': ['近7天销量', '近 7 天销量'],
-  '近7天销售额': ['近7天销售额', '近 7 天销售额'],
-  '中文商品名': ['中文商品名', '中文标题', 'chinese_name'],
-  '场景用途': ['场景用途', '使用场景', 'usage_scenario'],
-};
+import { FIELD_ALIASES } from '@/lib/excel';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -165,7 +153,7 @@ export async function POST(req: NextRequest) {
           product[cleanHeader] = value;
         }
         
-        for (const [standardKey, aliases] of Object.entries(FIELD_MAP)) {
+        for (const [standardKey, aliases] of Object.entries(FIELD_ALIASES)) {
           if (aliases.includes(cleanHeader)) {
             product[standardKey] = product[cleanHeader];
           }

@@ -6,6 +6,7 @@ import { ProductCard } from '@/components/ProductCard';
 import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check, X, Loader2, Archive, Library, Trash2, Edit2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { saveToPending, saveToCompleted, getPendingLibrary, getCompletedLibrary, deletePendingItem, deleteCompletedItem, LibraryItem, getLibraryDetail, renameLibrary } from '@/lib/storage';
+import * as XLSX from 'xlsx';
 
 // 静态账户配置
 const USERS = {
@@ -75,6 +76,15 @@ export default function Home() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
 
+  // Scheduler states
+  const [schedulerError, setSchedulerError] = useState<{
+    batchIndex: number;
+    totalBatches: number;
+    message: string;
+    retryAction: () => void;
+    abortAction: () => void;
+  } | null>(null);
+
   // Scroll to top when view changes
   useEffect(() => {
     if (mainRef.current) {
@@ -124,6 +134,23 @@ export default function Home() {
     localStorage.removeItem('app_user');
     setLoginUsername('');
     setLoginPassword('');
+  };
+
+  // Helper to extract URL from various formats
+  const extractUrl = (src: any): string => {
+    if (!src) return '';
+    let url = '';
+    if (typeof src === 'object' && src !== null) {
+      url = src.hyperlink || src.text || '';
+    } else {
+      url = String(src);
+    }
+    if (!url) return '';
+    const srcMatch = url.match(/src=["']?([^"'\s>]+)["']?/i);
+    if (srcMatch && srcMatch[1]) return srcMatch[1];
+    const urlMatch = url.match(/(https?:\/\/[^\s"'<>]+)/i);
+    if (urlMatch && urlMatch[0]) return urlMatch[0];
+    return url.trim();
   };
 
   const handleRename = async (id: string, newName: string) => {
@@ -188,28 +215,29 @@ export default function Home() {
     setView('home');
   };
 
-  useEffect(() => {
-    const fetchLibrary = async () => {
-      if (view === 'pending') {
-        setIsLibraryLoading(true);
-        try {
-          const items = await getPendingLibrary();
-          setLibraryItems(items);
-        } finally {
-          setIsLibraryLoading(false);
-        }
-      } else if (view === 'completed') {
-        setIsLibraryLoading(true);
-        try {
-          const items = await getCompletedLibrary();
-          setLibraryItems(items);
-        } finally {
-          setIsLibraryLoading(false);
-        }
+  const fetchLibrary = useCallback(async () => {
+    if (view === 'pending') {
+      setIsLibraryLoading(true);
+      try {
+        const items = await getPendingLibrary();
+        setLibraryItems(items);
+      } finally {
+        setIsLibraryLoading(false);
       }
-    };
-    fetchLibrary();
+    } else if (view === 'completed') {
+      setIsLibraryLoading(true);
+      try {
+        const items = await getCompletedLibrary();
+        setLibraryItems(items);
+      } finally {
+        setIsLibraryLoading(false);
+      }
+    }
   }, [view]);
+
+  useEffect(() => {
+    fetchLibrary();
+  }, [fetchLibrary]);
 
   // Save settings to localStorage
   const saveSettings = (key: string, model: string) => {
@@ -235,111 +263,182 @@ export default function Home() {
       });
 
       const data = await response.json();
-      if (data.success || data.data) {
-        setDebugResult(data.data);
+      if (data.success) {
+        alert('✅ ' + (data.message || 'API Key 有效！'));
       } else {
-         // Fallback for unexpected errors
-         setDebugResult({
-             success: false,
-             steps: [
-                 { name: 'Request', status: 'error', message: data.error || 'Unknown error', timestamp: Date.now() }
-             ],
-             error: data.error
-         });
+        alert('❌ ' + (data.error || 'API Key 无效，请检查'));
       }
     } catch (err: any) {
-        setDebugResult({
-             success: false,
-             steps: [
-                 { name: 'Network', status: 'error', message: err.message || 'Network error', timestamp: Date.now() }
-             ],
-             error: err.message
-         });
+      alert('❌ 网络请求失败，请检查连接或代理');
     } finally {
       setIsDebugLoading(false);
     }
   };
 
   const processLocalize = async (file: File, saveToLib: boolean = false) => {
-    console.log('开始本地化处理:', file.name, 'saveToLibrary:', saveToLib);
+    console.log('开始本地化处理 (前端调度模式):', file.name, 'saveToLibrary:', saveToLib);
     setIsLoading(true);
     setError(null);
     setLocalizeProgress(0);
     setLocalizeStatus('正在准备处理...');
-    
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      if (geminiApiKey) {
-        formData.append('apiKey', geminiApiKey);
-        formData.append('model', geminiModel);
-      }
+    setSchedulerError(null);
 
-      const response = await fetch('/api/localize', {
-        method: 'POST',
-        body: formData,
+    try {
+      // 1. 读取 Excel 文件
+      const dataBuffer = await file.arrayBuffer();
+      const workbookXLSX = XLSX.read(dataBuffer, { type: 'array' });
+      const sheetName = workbookXLSX.SheetNames[0];
+      const worksheetXLSX = workbookXLSX.Sheets[sheetName];
+      const rawData = XLSX.utils.sheet_to_json(worksheetXLSX, { header: 1, defval: "" }) as any[][];
+
+      if (rawData.length === 0) throw new Error('Excel 文件为空');
+
+      const headers = rawData[0] as string[];
+      const rows = rawData.slice(1);
+
+      // 识别字段
+      const knownImageHeaders = ['主图src', 'src', '_original_url_'];
+      const knownTitleHeaders = ['商品标题', '商品名', 'title', 'name'];
+      const srcField = headers.find(h => knownImageHeaders.includes(h)) || headers[0];
+      const titleField = headers.find(h => knownTitleHeaders.includes(h));
+
+      if (!titleField) throw new Error('未在 Excel 中找到商品标题列');
+
+      const allData = rows.map(row => {
+        const obj: any = {};
+        headers.forEach((h, i) => obj[h] = row[i]);
+        // 预存原始图片 URL 用于后续 Finalize
+        obj._original_image_url_ = extractUrl(obj[srcField]);
+        return obj;
       });
 
-      if (!response.ok) {
-        let errorMsg = '图片本地化失败';
-        try {
-          const errorData = await response.json();
-          errorMsg = errorData.error || errorMsg;
-        } catch (e) {
-          errorMsg = `请求失败: ${response.status} ${response.statusText}`;
+      // 2. 分批处理 AI 总结
+      const batchSize = 30;
+      const totalBatches = Math.ceil(allData.length / batchSize);
+      
+      for (let i = 0; i < allData.length; i += batchSize) {
+        const batchIndex = Math.floor(i / batchSize) + 1;
+        const currentBatch = allData.slice(i, i + batchSize);
+        const titles = currentBatch.map(d => d[titleField]).filter(Boolean);
+
+        let success = false;
+        while (!success) {
+          try {
+            setLocalizeStatus(`🤖 正在分析第 ${batchIndex}/${totalBatches} 批商品名...`);
+            setLocalizeProgress(5 + Math.floor((batchIndex / totalBatches) * 60));
+
+            const response = await fetch('/api/localize/batch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ titles, apiKey: geminiApiKey, model: geminiModel }),
+            });
+
+            if (!response.ok) {
+              const errData = await response.json();
+              throw new Error(errData.error || 'AI 处理失败');
+            }
+
+            const { summaries } = await response.json();
+            summaries.forEach((res: any, idx: number) => {
+              if (currentBatch[idx]) {
+                currentBatch[idx]['中文商品名'] = res.name;
+                currentBatch[idx]['场景用途'] = res.scenario;
+              }
+            });
+            success = true;
+          } catch (err: any) {
+            console.error(`Batch ${batchIndex} failed:`, err);
+            
+            // 等待用户决策
+            const decision = await new Promise<'retry' | 'abort'>((resolve) => {
+              setSchedulerError({
+                batchIndex,
+                totalBatches,
+                message: err.message,
+                retryAction: () => resolve('retry'),
+                abortAction: () => resolve('abort')
+              });
+            });
+
+            setSchedulerError(null);
+            if (decision === 'abort') {
+              throw new Error('用户取消了任务');
+            }
+            // If retry, the loop continues and tries again
+          }
         }
-        throw new Error(errorMsg);
       }
 
-      const reader = response.body?.getReader();
+      // 3. 准备 Finalize 阶段的列定义
+      const finalColumns: any[] = [];
+      headers.forEach(k => {
+        if (k && !k.startsWith('_')) {
+          finalColumns.push({ header: k, key: k, width: 25 });
+          if (k === titleField) {
+            finalColumns.push({ header: '中文商品名', key: '中文商品名', width: 30 });
+            finalColumns.push({ header: '场景用途', key: '场景用途', width: 30 });
+          }
+        }
+      });
+      finalColumns.push({ header: '主图src', key: '主图src', width: 25 });
+
+      // 4. 调用 Finalize API 处理图片和生成文件
+      setLocalizeStatus('🖼️ AI 分析完成！正在处理图片并生成最终文件...');
+      setLocalizeProgress(70);
+
+      const finalizeResponse = await fetch('/api/localize/finalize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          data: allData, 
+          headers, 
+          finalColumns, 
+          srcField 
+        }),
+      });
+
+      if (!finalizeResponse.ok) throw new Error('最终合成失败');
+
+      const reader = finalizeResponse.body?.getReader();
       if (!reader) throw new Error('无法读取响应流');
 
       const decoder = new TextDecoder();
       let fileBase64 = '';
       let partialLine = '';
-      let productsData: Product[] = [];
       
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         
         const chunk = decoder.decode(value, { stream: true });
-        const content = partialLine + chunk;
-        const lines = content.split('\n');
-        
+        const lines = (partialLine + chunk).split('\n');
         partialLine = lines.pop() || '';
         
         for (const line of lines) {
           if (!line.trim()) continue;
           try {
-            const data = JSON.parse(line);
-            if (data.type === 'progress') {
-              setLocalizeProgress(data.progress);
-              setLocalizeStatus(data.message);
-            } else if (data.type === 'file') {
-              fileBase64 = data.data;
-            } else if (data.type === 'products') {
-              // Assuming the API might return products data directly for saving
-              productsData = data.data;
-            } else if (data.type === 'error') {
-              throw new Error(data.message);
+            const json = JSON.parse(line);
+            if (json.type === 'progress') {
+              setLocalizeProgress(70 + Math.floor((json.progress / 100) * 30));
+              setLocalizeStatus(json.message);
+            } else if (json.type === 'file') {
+              fileBase64 = json.data;
+            } else if (json.type === 'error') {
+              throw new Error(json.message);
             }
           } catch (e) {
-            console.error('解析流数据失败:', e, line);
+            console.error('Finalize stream error:', e);
           }
         }
       }
 
-      if (!fileBase64) throw new Error('未收到处理后的文件数据');
+      if (!fileBase64) throw new Error('未收到最终文件数据');
 
-      // 将 base64 转回 blob
+      // 5. 下载或保存
       const byteCharacters = atob(fileBase64);
       const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
+      const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
       if (saveToLib) {
         const formData = new FormData();
@@ -354,49 +453,29 @@ export default function Home() {
 
         if (!saveResponse.ok) throw new Error('保存到库失败');
         setLocalizeStatus('✅ 已成功导入待选品库并保存到本地！');
-      } else {
-        // Original download logic
-        if ('showSaveFilePicker' in window) {
-          try {
-            const handle = await (window as any).showSaveFilePicker({
-              suggestedName: file.name.replace('.xlsx', '_local.xlsx'),
-              types: [{
-                description: 'Excel 文件',
-                accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] },
-              }],
-            });
-            const writable = await handle.createWritable();
-            await writable.write(blob);
-            await writable.close();
-            setLocalizeStatus('✅ 处理完成！文件已保存。');
-          } catch (saveErr: any) {
-            if (saveErr.name !== 'AbortError') {
-              const url = window.URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = file.name.replace('.xlsx', '_local.xlsx');
-              a.click();
-              window.URL.revokeObjectURL(url);
-              setLocalizeStatus('✅ 处理完成！Localized Excel 已下载。');
-            } else {
-              setLocalizeStatus('已取消保存');
-            }
-          }
-        } else {
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = file.name.replace('.xlsx', '_local.xlsx');
-          a.click();
-          window.URL.revokeObjectURL(url);
-          setLocalizeStatus('✅ 处理完成！Localized Excel 已下载。');
+        
+        // 如果当前正在待选品库视图，则刷新列表
+        if (view === 'pending') {
+          await fetchLibrary();
         }
+      } else {
+        // 使用传统下载方式，绕过 showSaveFilePicker 在长异步任务后的用户手势校验限制
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.name.replace('.xlsx', '_local.xlsx');
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        setLocalizeStatus('✅ 处理完成！Localized Excel 已下载。');
       }
-      
+
       setTimeout(() => setLocalizeStatus(null), 5000);
-    } catch (err) {
-      console.error('处理错误:', err);
-      setError(err instanceof Error ? err.message : '处理失败');
+    } catch (err: any) {
+      console.error('处理过程被中断:', err);
+      setError(err.message || '处理失败');
       setLocalizeStatus(null);
     } finally {
       setIsLoading(false);
@@ -566,30 +645,17 @@ export default function Home() {
 
       const blob = await response.blob();
       
-      if ('showSaveFilePicker' in window) {
-        try {
-          const handle = await (window as any).showSaveFilePicker({
-            suggestedName: fileName,
-            types: [{
-              description: 'Excel 文件',
-              accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] },
-            }],
-          });
-          const writable = await handle.createWritable();
-          await writable.write(blob);
-          await writable.close();
-        } catch (err: any) {
-          if (err.name !== 'AbortError') throw err;
-        }
-      } else {
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }
+      // 使用传统下载方式，因为它对异步任务后的“用户手势”限制较少，能更稳定地支持大文件下载
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      
       setLocalizeStatus('✅ 选品结果已成功导出！');
     } catch (err) {
       setError(err instanceof Error ? err.message : '导出出错');
@@ -772,181 +838,194 @@ export default function Home() {
                   <div className="w-10" /> {/* Spacer */}
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-3 pr-2 relative">
-                  {isLibraryLoading ? (
-                    <div className="flex flex-col items-center justify-center h-full">
-                      <Loader2 size={40} className="text-[#007AFF] animate-spin mb-4" />
-                      <p className="text-[#8E8E93] font-medium">正在加载库文件...</p>
-                    </div>
-                  ) : libraryItems.length === 0 ? (
+                <div className="flex-1 overflow-y-auto space-y-3 pr-2 relative custom-scrollbar">
+                  {libraryItems.length === 0 && !isLibraryLoading ? (
                     <div className="flex flex-col items-center justify-center h-full text-[#8E8E93]">
                       <Library size={48} className="mb-4 opacity-20" />
                       <p>暂无数据</p>
                     </div>
                   ) : (
-                    libraryItems.map((item) => (
-                      <div 
-                        key={item.id}
-                        className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between group hover:border-blue-200 transition-colors"
-                      >
-                        <div className="flex-1 min-w-0 mr-4">
-                          <div className="flex items-center gap-2 group/name">
-                            {editingId === item.id ? (
-                              <div className="flex items-center gap-2 flex-1">
-                                <input
-                                  autoFocus
-                                  type="text"
-                                  value={editingName}
-                                  onChange={(e) => setEditingName(e.target.value)}
-                                  onBlur={() => handleRename(item.id, editingName)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleRename(item.id, editingName);
-                                    if (e.key === 'Escape') setEditingId(null);
-                                  }}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="flex-1 px-2 py-1 bg-blue-50 border border-blue-200 rounded-lg text-sm font-bold text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRename(item.id, editingName);
-                                  }}
-                                  className="p-1 text-green-500 hover:bg-green-50 rounded-md"
-                                >
-                                  <Check size={14} />
-                                </button>
-                              </div>
-                            ) : (
-                              <>
-                                <h3 className="font-bold text-black truncate">{item.name}</h3>
-                                <button 
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    setEditingId(item.id);
-                                    setEditingName(item.name);
-                                  }}
-                                  className="p-1 text-gray-400 hover:text-blue-500 opacity-0 group-hover/name:opacity-100 transition-opacity"
-                                >
-                                  <Edit2 size={12} />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-3 text-[10px] text-[#8E8E93] mt-1">
-                            <span className="bg-gray-100 px-2 py-0.5 rounded-md font-bold text-black">
-                              {item.productCount ?? item.products.length} Items
-                            </span>
-                            <span>{new Date(item.timestamp).toLocaleString()}</span>
-                          </div>
-
-                          {/* Collaboration Tags */}
-                          {view === 'pending' && (
-                            <div className="flex flex-wrap gap-1.5 mt-2">
-                              {(!item.completedBy || item.completedBy.length === 0) ? (
-                                <span className="px-2 py-0.5 bg-gray-100 text-gray-400 rounded-md text-[10px] font-bold border border-gray-200">
-                                  无人完成
-                                </span>
-                              ) : item.completedBy.length >= 2 ? (
-                                <span className="px-2 py-0.5 bg-green-50 text-green-600 rounded-md text-[10px] font-bold border border-green-100 flex items-center gap-1">
-                                  <Check size={10} /> 2人完成
-                                </span>
+                    <>
+                      {libraryItems.map((item) => (
+                        <div 
+                          key={item.id}
+                          className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between group hover:border-blue-200 transition-colors"
+                        >
+                          <div className="flex-1 min-w-0 mr-4">
+                            <div className="flex items-center gap-2 group/name">
+                              {editingId === item.id ? (
+                                <div className="flex items-center gap-2 flex-1">
+                                  <input
+                                    autoFocus
+                                    type="text"
+                                    value={editingName}
+                                    onChange={(e) => setEditingName(e.target.value)}
+                                    onBlur={() => handleRename(item.id, editingName)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') handleRename(item.id, editingName);
+                                      if (e.key === 'Escape') setEditingId(null);
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="flex-1 px-2 py-1 bg-blue-50 border border-blue-200 rounded-lg text-sm font-bold text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  />
+                                  <button 
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRename(item.id, editingName);
+                                    }}
+                                    className="p-1 text-green-500 hover:bg-green-50 rounded-md"
+                                  >
+                                    <Check size={14} />
+                                  </button>
+                                </div>
                               ) : (
                                 <>
-                                  {/* Individual status for each user */}
-                                  {['flz', 'lyy'].map(u => {
-                                    const isDone = item.completedBy?.includes(u);
-                                    return (
-                                      <span 
-                                        key={u}
-                                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold border flex items-center gap-1 ${
-                                          isDone 
-                                            ? 'bg-blue-50 text-[#007AFF] border-blue-100' 
-                                            : 'bg-gray-50 text-gray-400 border-gray-100'
-                                        }`}
-                                      >
-                                        {isDone && <Check size={10} />}
-                                        {u.toUpperCase()} {isDone ? '已完成' : '待完成'}
-                                      </span>
-                                    );
-                                  })}
+                                  <h3 className="font-bold text-black truncate">{item.name}</h3>
+                                  <button 
+                                    type="button"
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      setEditingId(item.id);
+                                      setEditingName(item.name);
+                                    }}
+                                    className="p-1 text-gray-400 hover:text-blue-500 opacity-0 group-hover/name:opacity-100 transition-opacity"
+                                  >
+                                    <Edit2 size={12} />
+                                  </button>
                                 </>
                               )}
                             </div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {view === 'pending' && (
+                            <div className="flex items-center gap-3 text-[10px] text-[#8E8E93] mt-1">
+                              <span className="bg-gray-100 px-2 py-0.5 rounded-md font-bold text-black">
+                                {item.productCount ?? item.products.length} Items
+                              </span>
+                              <span>{new Date(item.timestamp).toLocaleString()}</span>
+                            </div>
+
+                            {/* Collaboration Tags */}
+                            {view === 'pending' && (
+                              <div className="flex flex-wrap gap-1.5 mt-2">
+                                {(!item.completedBy || item.completedBy.length === 0) ? (
+                                  <span className="px-2 py-0.5 bg-gray-100 text-gray-400 rounded-md text-[10px] font-bold border border-gray-200">
+                                    无人完成
+                                  </span>
+                                ) : item.completedBy.length >= 2 ? (
+                                  <span className="px-2 py-0.5 bg-green-50 text-green-600 rounded-md text-[10px] font-bold border border-green-100 flex items-center gap-1">
+                                    <Check size={10} /> 2人完成
+                                  </span>
+                                ) : (
+                                  <>
+                                    {/* Individual status for each user */}
+                                    {['flz', 'lyy'].map(u => {
+                                      const isDone = item.completedBy?.includes(u);
+                                      return (
+                                        <span 
+                                          key={u}
+                                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold border flex items-center gap-1 ${
+                                            isDone 
+                                              ? 'bg-blue-50 text-[#007AFF] border-blue-100' 
+                                              : 'bg-gray-50 text-gray-400 border-gray-100'
+                                          }`}
+                                        >
+                                          {isDone && <Check size={10} />}
+                                          {u.toUpperCase()} {isDone ? '已完成' : '待完成'}
+                                        </span>
+                                      );
+                                    })}
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {view === 'pending' && (
+                              <button
+                                type="button"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  setIsLibraryLoading(true);
+                                  try {
+                                    const detail = await getLibraryDetail(item.id);
+                                    setProducts(detail.products);
+                                    setCurrentFileName(detail.name);
+                                    setCurrentLibraryId(detail.id);
+                                    setCurrentLibraryType('pending');
+                                    setCurrentIndex(0);
+                                    setLikedProducts([]);
+                                    setView('home');
+                                  } catch (err: any) {
+                                    alert('加载详情失败: ' + err.message);
+                                  } finally {
+                                    setIsLibraryLoading(false);
+                                  }
+                                }}
+                                className="p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
+                                title="开始选品"
+                              >
+                                <Check size={18} />
+                              </button>
+                            )}
                             <button
-                              onClick={async () => {
+                              type="button"
+                              onClick={async (e) => {
+                                e.stopPropagation();
                                 setIsLibraryLoading(true);
                                 try {
                                   const detail = await getLibraryDetail(item.id);
-                                  setProducts(detail.products);
-                                  setCurrentFileName(detail.name);
-                                  setCurrentLibraryId(detail.id);
-                                  setCurrentLibraryType('pending');
-                                  setCurrentIndex(0);
-                                  setLikedProducts([]);
-                                  setView('home');
+                                  const dateStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '');
+                                  const suffix = view === 'completed' ? '已完成' : '待完成';
+                                  const fileName = `${detail.name.replace('.xlsx', '')}_${suffix}_${dateStr}.xlsx`;
+                                  await performExport(detail.products, fileName, detail.id, view as any);
                                 } catch (err: any) {
-                                  alert('加载详情失败: ' + err.message);
+                                  alert('导出失败: ' + err.message);
                                 } finally {
                                   setIsLibraryLoading(false);
                                 }
                               }}
-                              className="p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
-                              title="开始选品"
+                              className="p-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors"
+                              title="导出 Excel"
                             >
-                              <Check size={18} />
+                              <Download size={18} />
                             </button>
-                          )}
-                          <button
-                            onClick={async () => {
-                              setIsLibraryLoading(true);
-                              try {
-                                const detail = await getLibraryDetail(item.id);
-                                const dateStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '');
-                                const suffix = view === 'completed' ? '已完成' : '待完成';
-                                 const fileName = `${detail.name.replace('.xlsx', '')}_${suffix}_${dateStr}.xlsx`;
-                                 await performExport(detail.products, fileName, detail.id, view as any);
-                               } catch (err: any) {
-                                alert('导出失败: ' + err.message);
-                              } finally {
-                                setIsLibraryLoading(false);
-                              }
-                            }}
-                            className="p-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors"
-                            title="导出 Excel"
-                          >
-                            <Download size={18} />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              if (confirm('确定要删除吗？')) {
-                                setIsLibraryLoading(true);
-                                try {
-                                  if (view === 'pending') {
-                                    await deletePendingItem(item.id);
-                                    const items = await getPendingLibrary();
-                                    setLibraryItems(items);
-                                  } else {
-                                    await deleteCompletedItem(item.id);
-                                    const items = await getCompletedLibrary();
-                                    setLibraryItems(items);
+                            <button
+                              type="button"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (confirm('确定要删除吗？')) {
+                                  setIsLibraryLoading(true);
+                                  try {
+                                    if (view === 'pending') {
+                                      await deletePendingItem(item.id);
+                                      await fetchLibrary();
+                                    } else {
+                                      await deleteCompletedItem(item.id);
+                                      await fetchLibrary();
+                                    }
+                                  } finally {
+                                    setIsLibraryLoading(false);
                                   }
-                                } finally {
-                                  setIsLibraryLoading(false);
                                 }
-                              }
-                            }}
-                            className="p-2 text-[#FF3B30] hover:bg-red-50 rounded-xl transition-colors"
-                            title="删除"
-                          >
-                            <Trash2 size={18} />
-                          </button>
+                              }}
+                              className="p-2 text-[#FF3B30] hover:bg-red-50 rounded-xl transition-colors"
+                              title="删除"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
                         </div>
+                      ))}
+                    </>
+                  )}
+
+                  {/* Library Loading Overlay */}
+                  {isLibraryLoading && (
+                    <div className="absolute inset-0 bg-white/40 backdrop-blur-[2px] z-30 flex flex-col items-center justify-center rounded-2xl transition-all duration-300">
+                      <div className="bg-white p-6 rounded-3xl shadow-xl border border-gray-100 flex flex-col items-center space-y-3">
+                        <Loader2 size={32} className="text-[#007AFF] animate-spin" />
+                        <p className="text-xs font-bold text-black uppercase tracking-wider">正在同步中...</p>
                       </div>
-                    ))
+                    </div>
                   )}
                 </div>
               </motion.div>
@@ -1425,7 +1504,55 @@ export default function Home() {
           </div>
         )}
 
-        {/* 6. Saving Overlay */}
+        {/* 6. Scheduler Error Modal (Retry/Abort) */}
+        <AnimatePresence>
+          {schedulerError && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6"
+            >
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl overflow-hidden"
+              >
+                <div className="p-8">
+                  <div className="w-16 h-16 bg-red-50 rounded-2xl flex items-center justify-center text-red-500 mb-6">
+                    <AlertCircle size={32} />
+                  </div>
+                  <h3 className="text-2xl font-black text-black mb-2 tracking-tight">AI 处理中断</h3>
+                  <p className="text-[#8E8E93] text-sm mb-1 leading-relaxed">
+                    在处理第 <span className="text-black font-bold">{schedulerError.batchIndex}/{schedulerError.totalBatches}</span> 批商品时遇到了问题。
+                  </p>
+                  <div className="bg-red-50 border border-red-100 p-4 rounded-2xl mt-4">
+                    <p className="text-red-600 text-xs font-medium break-words leading-relaxed">
+                      {schedulerError.message}
+                    </p>
+                  </div>
+                </div>
+                <div className="bg-gray-50 p-6 flex flex-col gap-3">
+                  <button
+                    onClick={schedulerError.retryAction}
+                    className="w-full bg-[#007AFF] text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  >
+                    <RefreshCw size={18} /> 重试这一批
+                  </button>
+                  <button
+                    onClick={schedulerError.abortAction}
+                    className="w-full bg-white text-red-500 border-2 border-red-50 py-3.5 rounded-2xl font-bold active:scale-95 transition-all"
+                  >
+                    全部放弃
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* 7. Saving Overlay */}
         {isSaving && (
           <div className="fixed inset-0 flex flex-col items-center justify-center p-6 text-center z-[9999] bg-black/40 backdrop-blur-sm pointer-events-auto">
             <div className="bg-white p-8 rounded-[2rem] shadow-2xl flex flex-col items-center space-y-4 max-w-xs w-full">

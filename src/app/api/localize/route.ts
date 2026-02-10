@@ -155,14 +155,18 @@ export async function POST(req: NextRequest) {
                             
                             try {
                                 const summaries = await summarizeProductNamesBatch(titles, apiKey, model);
+                                if (summaries.length === 0) {
+                                    throw new Error(`AI 总结返回结果为空，请检查 API Key 是否有效或网络是否通畅。`);
+                                }
                                 summaries.forEach((res, index) => {
                                     if (batch[index]) {
                                         batch[index]['中文商品名'] = res.name;
                                         batch[index]['场景用途'] = res.scenario;
                                     }
                                 });
-                            } catch (err) {
+                            } catch (err: any) {
                                 console.error(`批次 ${batchIndex} AI 处理失败:`, err);
+                                throw new Error(`AI 处理失败 (第 ${batchIndex} 批): ${err.message}`);
                             }
                         }
                     }
@@ -185,15 +189,6 @@ export async function POST(req: NextRequest) {
                     
                     if (srcField) cleanRowData[srcField] = ' ';
                     delete cleanRowData['_original_url_'];
-
-                    if (titleField && rowData[titleField]) {
-                        if (!cleanRowData['中文商品名']) {
-                            cleanRowData['中文商品名'] = rowData[titleField].length > 15 ? rowData[titleField].substring(0, 15) + '...' : rowData[titleField];
-                        }
-                        if (!cleanRowData['场景用途']) {
-                            cleanRowData['场景用途'] = '通用场景（猜测）';
-                        }
-                    }
 
                     const row = worksheet.addRow(cleanRowData);
                     row.height = 100;

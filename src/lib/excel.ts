@@ -24,6 +24,42 @@ export interface Product {
   [key: string]: any;
 }
 
+export const FIELD_ALIASES: Record<string, string[]> = {
+  '商品标题': ['商品标题', '商品名', '标题', 'Name', 'Title'],
+  '商品售价': ['商品售价', '最低售价', '售价', '价格', 'Price', 'Sale Price'],
+  '邮费': ['邮费', '物流费用', '运费', 'Shipping'],
+  '评分': ['评分', '商品评分', '店铺评分', 'Rating', 'Score'],
+  '商店名称': ['商店名称', '店铺名', '店铺名称', 'Shop Name', 'Store Name'],
+  '店铺销量': ['店铺销量', '店铺总销量', 'Shop Sales'],
+  '近7天销量': ['近7天销量', '近 7 天销量', '7天销量', '7D Sales'],
+  '近7天销售额': ['近7天销售额', '近 7 天销售额', '7天销售额', '7D Revenue'],
+  '总销量': ['总销量', '销量', '累计销量', 'Total Sales'],
+  '关联达人': ['关联达人', '达人数量', '达人', '关联达人数', 'Influencers', 'Creator Count'],
+  '达人出单率': ['达人出单率', '出单率', '转化率', '达人转化率', 'Conversion', 'Conv %', 'CR%'],
+  '关联视频': ['关联视频', '视频', '关联视频数', 'Videos'],
+  '视频曝光量': ['视频曝光量', '曝光', '播放量', 'Views', 'Plays', 'Impressions'],
+  '中文商品名': ['中文商品名', '中文标题', 'chinese_name'],
+  '场景用途': ['场景用途', '使用场景', 'usage_scenario'],
+};
+
+export const getProductField = (product: Product, standardKey: string): any => {
+  // 1. 直接尝试标准 Key
+  if (product[standardKey] !== undefined && product[standardKey] !== null && String(product[standardKey]) !== 'undefined') {
+    return product[standardKey];
+  }
+
+  // 2. 尝试别名
+  const aliases = FIELD_ALIASES[standardKey] || [];
+  for (const alias of aliases) {
+    if (product[alias] !== undefined && product[alias] !== null && String(product[alias]) !== 'undefined') {
+      return product[alias];
+    }
+  }
+
+  // 3. 兜底：如果都没有，返回空
+  return '';
+};
+
 export const exportToExcel = (products: Product[], fileName: string = 'liked_products.xlsx') => {
   const dataToExport = products.map(p => {
     const { ...cleanProduct } = p;

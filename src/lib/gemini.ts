@@ -24,33 +24,37 @@ export interface DebugResponse {
 
 function generatePrompt(productNames: string[]): string {
     const titlesList = productNames.map((name, i) => `${i + 1}. ${name}`).join('\n');
-    return `你是一个顶级的跨境电商选品与市场专家。请发挥你的深度推理能力，阅读以下一组英文商品标题，精准提取核心卖点，并将其本地化为更符合中国选品习惯的中文商品名与场景用途。
- 
- **处理规则：** 
- 
- 1. **中文商品名 (name)**： 
-    - 必须翻译成中文，严禁保留英文关键词。
-    - 风格要求：极其简练且专业。格式通常为“核心属性/核心人群 + 产品核心词”。 
-    - **严格过滤**：必须剔除所有促销词（如 Best Gift, New, Hot Sale, 2024/2025）、无用规格（如 8x6 inches, 52 Cards）、冗余修饰词及品牌名。 
-    - 字数限制：12个汉字以内。 
- 
- 2. **场景用途 (scenario)**： 
-    - 必须使用中文。
-    - **深度推理**：请根据标题中的隐含线索（如材质、功能、适用人群）推断其最精准的消费场景。
-    - **优先提取**：如果标题中有明确场景词（如 "Party", "Stress Relief", "Valentine", "Commuting"），请优先使用。 
-    - **智能标注**：如果标题完全无场景线索，请基于产品常识给出最可能的用途，并在结尾加上“(猜测)”。 
-    - 场景描述侧重：送礼对象（如“情人节送女友”）或 具体活动/功能（如“办公室解压/解闷”）。 
-    - 字数限制：15个汉字以内。 
- 
- **翻译示例：**
- - 输入: "New Interactive Elephant Toy for Toddlers" -> 输出: {"name": "幼儿大象互动玩具", "scenario": "幼儿感官开发/互动"}
- - 输入: "Go F*** Yourself Adult Card Game" -> 输出: {"name": "派对成人桌游纸牌", "scenario": "聚会/酒吧社交游戏"}
- 
- **返回格式要求：** 
+    return `你是一个拥有10年经验的顶级跨境电商选品与市场专家。你的任务是阅读一组英文商品标题，精准提取核心卖点，并将其转化为高度符合中国选品习惯、且能瞬间抓住眼球的中文商品名与场景用途。
+
+**核心目标：** 
+1. 彻底剔除所有“废话”（促销词、规格词、品牌名）。
+2. 将生涩的英文翻译为地道、专业的中文选品词汇。
+3. 严禁直接翻译，必须基于产品属性进行“二次创作”和“逻辑推理”。
+
+**处理规则：** 
+
+1. **中文商品名 (name)**： 
+   - **绝对禁令**：严禁出现任何英文字母、数字（除非是型号如 4K, 5G）或特殊符号。
+   - **风格要求**：极其精炼。格式通常为“核心属性/核心人群 + 产品核心词”。
+   - **剔除内容**：必须剔除 New, Hot Sale, Best Gift, 2024/2025, 8x10 inch, 52 Cards 等一切促销词和无用规格。
+   - **字数限制**：10个汉字以内。
+
+2. **场景用途 (scenario)**： 
+   - **深度推理**：不要只看字面意思。如果标题有 "Sensory", "Stress Relief"，场景应是“儿童感官开发”或“办公室解压解闷”。
+   - **拒绝平庸**：严禁使用“通用场景”、“日常使用”等模糊词汇。
+   - **具体化**：必须给出具体的“人群+动作”或“节日+对象”。例如：“情侣纪念日惊喜”、“自闭症儿童康复训练”、“露营派对活跃气氛”。
+   - **字数限制**：15个汉字以内。
+
+**优质示例 (学习模板)：**
+- 输入: "New Interactive Elephant Toy for Toddlers" -> 输出: {"name": "幼儿大象互动玩具", "scenario": "幼儿感官开发/亲子互动"}
+- 输入: "Go F*** Yourself Adult Card Game" -> 输出: {"name": "成人社交搞怪桌游", "scenario": "酒吧派对/破冰解压"}
+- 输入: "Luna Bean Original Hand Casting Kit - Hand Mold Kit for Couples" -> 输出: {"name": "情侣手模DIY套装", "scenario": "周年纪念日/情人节手工礼品"}
+- 输入: "NeeDoh Good Vibes Squishy Stress Ball with Messages" -> 输出: {"name": "正能量解压捏捏乐", "scenario": "办公室解压/情绪调节"}
+
+**返回格式要求：** 
 - 必须返回一个标准的 JSON 数组，包含 ${productNames.length} 个对象。
-- 数组中的对象顺序必须与输入的商品标题顺序完全一致。
 - 每个对象必须包含 "name" 和 "scenario" 两个字段。
-- **严禁包含任何 Markdown 格式（如 \`\`\`json）、思考过程或其他文字，仅返回 JSON 数组。**
+- **严禁包含任何文字说明、Markdown 标签或思考过程，仅返回原始 JSON。**
 
 **待处理标题列表：** 
 ${titlesList}`;
@@ -141,6 +145,28 @@ function parseGeminiJson(text: string): any[] | null {
         }
     }
     return null;
+}
+
+export async function validateGeminiKey(apiKey: string, modelName: string = "gemini-1.5-flash"): Promise<{ success: boolean; error?: string }> {
+  if (!apiKey) return { success: false, error: 'API Key is missing' };
+
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: modelName });
+    
+    // 发送一个极其简单的请求，仅用于验证 Key 的有效性
+    const result = await model.generateContent("Hi, reply with 'OK'");
+    const response = await result.response;
+    const text = response.text();
+    
+    return { success: !!text };
+  } catch (error: any) {
+    let errorMsg = error.message || '未知错误';
+    if (errorMsg.includes('API_KEY_INVALID')) errorMsg = '无效的 API Key';
+    else if (errorMsg.includes('fetch failed')) errorMsg = '网络连接失败，请检查代理设置';
+    
+    return { success: false, error: errorMsg };
+  }
 }
 
 export async function debugGeminiCall(
