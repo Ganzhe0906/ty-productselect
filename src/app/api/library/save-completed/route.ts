@@ -31,19 +31,19 @@ export async function POST(req: NextRequest) {
         const id = crypto.randomUUID();
         let excelUrl = '';
 
-        // 1. Try to copy original Excel from Blob if originalLibraryId exists
+        // 1. Try to copy original Excel from R2 if originalLibraryId exists
         if (originalLibraryId) {
             const sourceLib = await getLibraryById(originalLibraryId);
             if (sourceLib && sourceLib.excel_url) {
                 try {
                     excelUrl = await copyBlob(sourceLib.excel_url, `libraries/${id}.xlsx`);
                 } catch (copyError) {
-                    console.error('Failed to copy blob, falling back to generation:', copyError);
+                    console.error('Failed to copy from R2, falling back to generation:', copyError);
                 }
             }
         }
 
-        // 2. Fallback: Generate new Excel and upload to Blob
+        // 2. Fallback: Generate new Excel and upload to R2
         if (!excelUrl) {
             const workbook = new ExcelJS.Workbook();
             const worksheet = workbook.addWorksheet('Completed Selection');
@@ -72,6 +72,14 @@ export async function POST(req: NextRequest) {
         }
 
         // 3. Save to Postgres
+        // 校验 originalLibraryId 是否为有效的 UUID，防止插入数据库时报错
+        const isValidUUID = (uuid: string) => {
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            return uuidRegex.test(uuid);
+        };
+
+        const finalOriginalId = originalLibraryId && isValidUUID(originalLibraryId) ? originalLibraryId : null;
+
         const metadata = {
             id,
             name: name || `Selection_${new Date().getTime()}`,
@@ -79,7 +87,7 @@ export async function POST(req: NextRequest) {
             timestamp: Date.now(),
             excel_url: excelUrl,
             products,
-            original_library_id: originalLibraryId,
+            original_library_id: finalOriginalId,
             created_by: createdBy
         };
         await saveLibrary(metadata);

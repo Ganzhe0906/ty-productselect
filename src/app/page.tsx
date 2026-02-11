@@ -3,7 +3,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Product, exportToExcel } from '@/lib/excel';
 import { ProductCard } from '@/components/ProductCard';
-import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check, X, Loader2, Archive, Library, Trash2, Edit2 } from 'lucide-react';
+import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check, X, Loader2, Archive, Library, Trash2, Edit2, Users } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { saveToPending, saveToCompleted, getPendingLibrary, getCompletedLibrary, deletePendingItem, deleteCompletedItem, LibraryItem, getLibraryDetail, renameLibrary } from '@/lib/storage';
 import * as XLSX from 'xlsx';
@@ -62,8 +62,8 @@ export default function Home() {
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
-  const [view, setView] = useState<'home' | 'pending' | 'completed'>('home');
-  const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
+  const [view, setView] = useState<'home' | 'pending' | 'completed' | 'combined'>('home');
+  const [libraryItems, setLibraryItems] = useState<any[]>([]);
   const [isLibraryLoading, setIsLibraryLoading] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [isImportingToLibrary, setIsImportingToLibrary] = useState(false);
@@ -231,6 +231,17 @@ export default function Home() {
       try {
         const items = await getCompletedLibrary();
         setLibraryItems(items);
+      } finally {
+        setIsLibraryLoading(false);
+      }
+    } else if (view === 'combined') {
+      setIsLibraryLoading(true);
+      try {
+        const res = await fetch('/api/library/combined');
+        const data = await res.json();
+        setLibraryItems(data);
+      } catch (err) {
+        console.error('Failed to fetch combined library:', err);
       } finally {
         setIsLibraryLoading(false);
       }
@@ -585,24 +596,33 @@ export default function Home() {
 
   // Handle auto-save when finished
   useEffect(() => {
+    let isMounted = true;
     const autoSave = async () => {
+      // 仅在刚完成且有选中商品时执行一次保存
       if (isFinished && likedProducts.length > 0 && !isSaving) {
         setIsSaving(true);
         try {
           const completedName = `${(currentFileName || '未命名选品').replace('.xlsx', '')}_${currentUser || '未知'}`;
           await saveToCompleted(completedName, likedProducts, currentLibraryId || undefined, currentUser || undefined);
-          console.log('Saved to completed library');
+          if (isMounted) {
+            console.log('Saved to completed library');
+            // 保存成功后静默刷新库列表，避免 Next.js 强制刷新页面导致请求中断
+            fetchLibrary();
+          }
         } catch (err) {
-          console.error('Failed to save to completed library:', err);
-          alert('保存选品结果失败，请尝试手动导出或重新进入。');
+          if (isMounted) {
+            console.error('Failed to save to completed library:', err);
+            alert('保存选品结果失败，请尝试手动导出或重新进入。');
+          }
         } finally {
-          setIsSaving(false);
+          if (isMounted) setIsSaving(false);
         }
       }
     };
     
     autoSave();
-  }, [isFinished, likedProducts, currentFileName, currentLibraryId, currentUser]);
+    return () => { isMounted = false; };
+  }, [isFinished]); // 优化：仅监听完成状态，防止重复触发保存逻辑
 
   const handleBack = useCallback(() => {
     if (currentIndex > 0) {
@@ -854,6 +874,33 @@ export default function Home() {
                 exit={{ opacity: 0, x: -20 }}
                 className="absolute inset-0 ios-card bg-white/80 ios-blur flex flex-col p-4 md:p-8 z-20 overflow-hidden"
               >
+                <div className="flex gap-2 mb-4 p-1 bg-gray-100/50 rounded-xl">
+                  <button
+                    onClick={() => setView('pending')}
+                    className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
+                      view === 'pending' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    待选品库
+                  </button>
+                  <button
+                    onClick={() => setView('completed')}
+                    className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
+                      view === 'completed' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    完成选品库
+                  </button>
+                  <button
+                    onClick={() => setView('combined')}
+                    className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${
+                      view === 'combined' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    <Users size={14} /> 双人合并
+                  </button>
+                </div>
+
                 <div className="flex items-center justify-between mb-6">
                   <button 
                     onClick={() => {
@@ -865,12 +912,12 @@ export default function Home() {
                     <X size={24} />
                   </button>
                   <h2 className="text-xl font-bold text-black">
-                    {view === 'pending' ? '待选品库' : '完成选品库'}
+                    {view === 'pending' ? '待选品库' : (view === 'completed' ? '完成选品库' : '双人合并输出')}
                   </h2>
                   <div className="w-10" /> {/* Spacer */}
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-3 pr-2 relative custom-scrollbar">
+                <div className={`flex-1 overflow-y-auto space-y-3 pr-2 relative custom-scrollbar ${isLibraryLoading ? 'pointer-events-none' : ''}`}>
                   {libraryItems.length === 0 && !isLibraryLoading ? (
                     <div className="flex flex-col items-center justify-center h-full text-[#8E8E93]">
                       <Library size={48} className="mb-4 opacity-20" />
@@ -914,66 +961,102 @@ export default function Home() {
                               ) : (
                                 <>
                                   <h3 className="font-bold text-black truncate">{item.name}</h3>
-                                  <button 
-                                    type="button"
-                                    onClick={async (e) => {
-                                      e.stopPropagation();
-                                      setEditingId(item.id);
-                                      setEditingName(item.name);
-                                    }}
-                                    className="p-1 text-gray-400 hover:text-blue-500 opacity-0 group-hover/name:opacity-100 transition-opacity"
-                                  >
-                                    <Edit2 size={12} />
-                                  </button>
+                                  {view !== 'combined' && (
+                                    <button 
+                                      type="button"
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        setEditingId(item.id);
+                                        setEditingName(item.name);
+                                      }}
+                                      className="p-1 text-gray-400 hover:text-blue-500 opacity-0 group-hover/name:opacity-100 transition-opacity"
+                                    >
+                                      <Edit2 size={12} />
+                                    </button>
+                                  )}
                                 </>
                               )}
                             </div>
-                            <div className="flex items-center gap-3 text-[10px] text-[#8E8E93] mt-1">
-                              <span className="bg-gray-100 px-2 py-0.5 rounded-md font-bold text-black">
-                                {item.productCount ?? item.products.length} Items
-                              </span>
-                              <span>{new Date(item.timestamp).toLocaleString()}</span>
-                            </div>
-
-                            {/* Collaboration Tags */}
-                            {view === 'pending' && (
-                              <div className="flex flex-wrap gap-1.5 mt-2">
-                                {(!item.completedBy || item.completedBy.length === 0) ? (
-                                  <span className="px-2 py-0.5 bg-gray-100 text-gray-400 rounded-md text-[10px] font-bold border border-gray-200">
-                                    无人完成
+                            
+                            {view === 'combined' ? (
+                              <div className="flex flex-col gap-1.5 mt-2">
+                                <div className="flex items-center gap-3 text-[10px] text-[#8E8E93]">
+                                  <span className="bg-gray-100 px-2 py-0.5 rounded-md font-bold text-black">
+                                    {item.productCount} Items
                                   </span>
-                                ) : item.completedBy.length >= 2 ? (
-                                  <span className="px-2 py-0.5 bg-green-50 text-green-600 rounded-md text-[10px] font-bold border border-green-100 flex items-center gap-1">
-                                    <Check size={10} /> 2人完成
+                                  <span>{new Date(item.timestamp).toLocaleString()}</span>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border flex items-center gap-1 ${
+                                    item.flz ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-gray-50 text-gray-400 border-gray-100'
+                                  }`}>
+                                    {item.flz && <Check size={10} />}
+                                    FLZ {item.flz ? `选中 ${item.flz.count}` : '待完成'}
                                   </span>
-                                ) : (
-                                  <>
-                                    {/* Individual status for each user */}
-                                    {['flz', 'lyy'].map(u => {
-                                      const isDone = item.completedBy?.includes(u);
-                                      return (
-                                        <span 
-                                          key={u}
-                                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold border flex items-center gap-1 ${
-                                            isDone 
-                                              ? 'bg-blue-50 text-[#007AFF] border-blue-100' 
-                                              : 'bg-gray-50 text-gray-400 border-gray-100'
-                                          }`}
-                                        >
-                                          {isDone && <Check size={10} />}
-                                          {u.toUpperCase()} {isDone ? '已完成' : '待完成'}
-                                        </span>
-                                      );
-                                    })}
-                                  </>
-                                )}
+                                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border flex items-center gap-1 ${
+                                    item.lyy ? 'bg-purple-50 text-purple-600 border-purple-100' : 'bg-gray-50 text-gray-400 border-gray-100'
+                                  }`}>
+                                    {item.lyy && <Check size={10} />}
+                                    LYY {item.lyy ? `选中 ${item.lyy.count}` : '待完成'}
+                                  </span>
+                                  {item.isBothDone && (
+                                    <span className="px-2 py-0.5 bg-green-50 text-green-600 rounded-md text-[10px] font-bold border border-green-100">
+                                      共同选中 {item.combinedCount}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
+                            ) : (
+                              <>
+                                <div className="flex items-center gap-3 text-[10px] text-[#8E8E93] mt-1">
+                                  <span className="bg-gray-100 px-2 py-0.5 rounded-md font-bold text-black">
+                                    {item.productCount ?? item.products.length} Items
+                                  </span>
+                                  <span>{new Date(item.timestamp).toLocaleString()}</span>
+                                </div>
+
+                                {/* Collaboration Tags */}
+                                {view === 'pending' && (
+                                  <div className="flex flex-wrap gap-1.5 mt-2">
+                                    {(!item.completedBy || item.completedBy.length === 0) ? (
+                                      <span className="px-2 py-0.5 bg-gray-100 text-gray-400 rounded-md text-[10px] font-bold border border-gray-200">
+                                        无人完成
+                                      </span>
+                                    ) : item.completedBy.length >= 2 ? (
+                                      <span className="px-2 py-0.5 bg-green-50 text-green-600 rounded-md text-[10px] font-bold border border-green-100 flex items-center gap-1">
+                                        <Check size={10} /> 2人完成
+                                      </span>
+                                    ) : (
+                                      <>
+                                        {['flz', 'lyy'].map(u => {
+                                          const isDone = item.completedBy?.includes(u);
+                                          return (
+                                            <span 
+                                              key={u}
+                                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold border flex items-center gap-1 ${
+                                                isDone 
+                                                  ? 'bg-blue-50 text-[#007AFF] border-blue-100' 
+                                                  : 'bg-gray-50 text-gray-400 border-gray-100'
+                                              }`}
+                                            >
+                                              {isDone && <Check size={10} />}
+                                              {u.toUpperCase()} {isDone ? '已完成' : '待完成'}
+                                            </span>
+                                          );
+                                        })}
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </>
                             )}
                           </div>
+                          
                           <div className="flex items-center gap-2">
                             {view === 'pending' && (
                               <button
                                 type="button"
+                                disabled={isLibraryLoading}
                                 onClick={async (e) => {
                                   e.stopPropagation();
                                   setIsLibraryLoading(true);
@@ -992,58 +1075,109 @@ export default function Home() {
                                     setIsLibraryLoading(false);
                                   }
                                 }}
-                                className="p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
+                                className={`p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors ${isLibraryLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 title="开始选品"
                               >
                                 <Check size={18} />
                               </button>
                             )}
-                            <button
-                              type="button"
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                setIsLibraryLoading(true);
-                                try {
-                                  const detail = await getLibraryDetail(item.id);
-                                  const dateStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '');
-                                  const suffix = view === 'completed' ? '已完成' : '待完成';
-                                  const fileName = `${detail.name.replace('.xlsx', '')}_${suffix}_${dateStr}.xlsx`;
-                                  await performExport(detail.products, fileName, detail.id, view as any);
-                                } catch (err: any) {
-                                  alert('导出失败: ' + err.message);
-                                } finally {
-                                  setIsLibraryLoading(false);
-                                }
-                              }}
-                              className="p-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors"
-                              title="导出 Excel"
-                            >
-                              <Download size={18} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                if (confirm('确定要删除吗？')) {
+                            
+                            {view === 'combined' ? (
+                              <button
+                                type="button"
+                                disabled={!item.isBothDone || isLibraryLoading}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
                                   setIsLibraryLoading(true);
+                                  setLocalizeStatus('正在执行双人比对并导出...');
                                   try {
-                                    if (view === 'pending') {
-                                      await deletePendingItem(item.id);
-                                      await fetchLibrary();
-                                    } else {
-                                      await deleteCompletedItem(item.id);
-                                      await fetchLibrary();
-                                    }
+                                    const response = await fetch('/api/export/combined', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ originalLibraryId: item.id })
+                                    });
+                                    
+                                    if (!response.ok) throw new Error('导出失败');
+                                    
+                                    const blob = await response.blob();
+                                    const url = window.URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = `${item.name.replace('.xlsx', '')}_双人共同选中.xlsx`;
+                                    document.body.appendChild(a);
+                                    a.click();
+                                    document.body.removeChild(a);
+                                    window.URL.revokeObjectURL(url);
+                                    setLocalizeStatus('✅ 导出成功！');
+                                  } catch (err: any) {
+                                    alert('导出失败: ' + err.message);
                                   } finally {
                                     setIsLibraryLoading(false);
+                                    setTimeout(() => setLocalizeStatus(null), 3000);
                                   }
-                                }
-                              }}
-                              className="p-2 text-[#FF3B30] hover:bg-red-50 rounded-xl transition-colors"
-                              title="删除"
-                            >
-                              <Trash2 size={18} />
-                            </button>
+                                }}
+                                className={`p-2 rounded-xl transition-all flex items-center gap-2 px-4 ${
+                                  item.isBothDone && !isLibraryLoading
+                                    ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm active:scale-95' 
+                                    : 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
+                                }`}
+                                title={item.isBothDone ? '导出交集 Excel' : '需双人均完成后才可导出'}
+                              >
+                                <Download size={18} />
+                                <span className="text-xs font-bold">{item.isBothDone ? '导出交集' : '待完成'}</span>
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={isLibraryLoading}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    setIsLibraryLoading(true);
+                                    try {
+                                      const detail = await getLibraryDetail(item.id);
+                                      const dateStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '');
+                                      const suffix = view === 'completed' ? '已完成' : '待完成';
+                                      const fileName = `${detail.name.replace('.xlsx', '')}_${suffix}_${dateStr}.xlsx`;
+                                      await performExport(detail.products, fileName, detail.id, view as any);
+                                    } catch (err: any) {
+                                      alert('导出失败: ' + err.message);
+                                    } finally {
+                                      setIsLibraryLoading(false);
+                                    }
+                                  }}
+                                  className={`p-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors ${isLibraryLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                  title="导出 Excel"
+                                >
+                                  <Download size={18} />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isLibraryLoading}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    if (confirm('确定要删除吗？')) {
+                                      setIsLibraryLoading(true);
+                                      try {
+                                        if (view === 'pending') {
+                                          await deletePendingItem(item.id);
+                                          await fetchLibrary();
+                                        } else {
+                                          await deleteCompletedItem(item.id);
+                                          await fetchLibrary();
+                                        }
+                                      } finally {
+                                        setIsLibraryLoading(false);
+                                      }
+                                    }
+                                  }}
+                                  className={`p-2 text-[#FF3B30] hover:bg-red-50 rounded-xl transition-colors ${isLibraryLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                  title="删除"
+                                >
+                                  <Trash2 size={18} />
+                                </button>
+                              </>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -1079,7 +1213,7 @@ export default function Home() {
                       <Library size={20} className="text-[#007AFF]" />
                       <h3 className="font-bold text-black text-sm uppercase tracking-wider">我的选品仓库</h3>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
                       <button 
                         onClick={() => setView('pending')}
                         className="ios-card bg-white p-6 md:p-8 flex items-center gap-6 hover:border-blue-200 transition-all group shadow-sm hover:shadow-md"
@@ -1103,6 +1237,19 @@ export default function Home() {
                         <div className="text-left">
                           <div className="font-bold text-black text-lg md:text-xl">完成选品库</div>
                           <p className="text-xs md:text-sm text-[#8E8E93] mt-1">查看已筛选导出的结果</p>
+                        </div>
+                      </button>
+
+                      <button 
+                        onClick={() => setView('combined')}
+                        className="ios-card bg-white p-6 md:p-8 flex items-center gap-6 hover:border-purple-200 transition-all group shadow-sm hover:shadow-md"
+                      >
+                        <div className="w-12 h-12 md:w-14 md:h-14 bg-purple-50 rounded-2xl flex items-center justify-center text-[#AF52DE] group-hover:scale-110 transition-transform">
+                          <Users size={28} />
+                        </div>
+                        <div className="text-left">
+                          <div className="font-bold text-black text-lg md:text-xl">双人合并</div>
+                          <p className="text-xs md:text-sm text-[#8E8E93] mt-1">对比两人的共同筛选结果</p>
                         </div>
                       </button>
                     </div>

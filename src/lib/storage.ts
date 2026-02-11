@@ -24,7 +24,11 @@ export const saveToCompleted = async (name: string, products: Product[], origina
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, products, originalLibraryId, createdBy }),
   });
-  if (!response.ok) throw new Error('Failed to save to completed library');
+  
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Failed to save to completed library');
+  }
   return response.json();
 };
 

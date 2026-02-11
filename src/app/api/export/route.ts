@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
         let worksheet = workbook.addWorksheet('Liked Products');
         let sourceSheet: ExcelJS.Worksheet | null = null;
 
-        // 如果提供了 libraryId，尝试从 Blob 加载原始 Excel 作为模板
+        // 如果提供了 libraryId，尝试从 R2 加载原始 Excel 作为模板
         if (libraryId) {
             try {
                 await initDb();
@@ -51,12 +51,12 @@ export async function POST(req: NextRequest) {
                     console.log(`[Export] Loading source template from ${excelUrl}`);
                     const buffer = await downloadBuffer(excelUrl);
                     const sourceWorkbook = new ExcelJS.Workbook();
-                    await sourceWorkbook.xlsx.load(buffer);
+                    await sourceWorkbook.xlsx.load(buffer as any);
                     sourceSheet = sourceWorkbook.getWorksheet(1) || null;
                     console.log(`[Export] Source template loaded successfully`);
                 }
             } catch (err) {
-                console.error('[Export] Failed to load original excel from blob:', err);
+                console.error('[Export] Failed to load original excel from R2:', err);
             }
         }
 
@@ -175,7 +175,7 @@ export async function POST(req: NextRequest) {
 
                 if (originalImage) {
                     try {
-                        const imgData = sourceSheet.workbook.getImage(originalImage.imageId);
+                        const imgData = sourceSheet.workbook.getImage(originalImage.imageId as any);
                         if (imgData && imgData.buffer) {
                             const extension = imgData.extension || 'png';
                             const imageId = workbook.addImage({

@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import crypto from 'crypto';
 import { initDb, getLibraries, saveLibrary, deleteLibrary, getLibraryById, updateLibraryName } from '@/lib/db';
-import { uploadToBlob, deleteFromBlob } from '@/lib/blob-utils';
+import { uploadToBlob, deleteFromBlob, isR2Url } from '@/lib/blob-utils';
 import { FIELD_ALIASES } from '@/lib/excel';
 
 export async function GET(req: NextRequest) {
@@ -37,12 +37,18 @@ export async function GET(req: NextRequest) {
     if (type === 'pending') {
       const allCompleted = await getLibraries('completed');
       allCompleted.forEach(comp => {
-        if (comp.original_library_id && comp.created_by) {
-          if (!completionMap[comp.original_library_id]) {
-            completionMap[comp.original_library_id] = [];
+        const oid = comp.original_library_id || (comp as any).originallibraryid;
+        const creator = comp.created_by || (comp as any).createdby;
+        
+        if (oid && creator) {
+          const oidStr = String(oid).toLowerCase();
+          const creatorStr = String(creator).toLowerCase();
+          
+          if (!completionMap[oidStr]) {
+            completionMap[oidStr] = [];
           }
-          if (!completionMap[comp.original_library_id].includes(comp.created_by)) {
-            completionMap[comp.original_library_id].push(comp.created_by);
+          if (!completionMap[oidStr].includes(creatorStr)) {
+            completionMap[oidStr].push(creatorStr);
           }
         }
       });
@@ -51,19 +57,22 @@ export async function GET(req: NextRequest) {
     // Map database rows to the format expected by the frontend
     // Optimization: In list view, we don't need the full products array which can be huge.
     // We only return the count to save bandwidth and prevent fetch errors.
-    const items = libraries.map(lib => ({
-      id: lib.id,
-      name: lib.name,
-      timestamp: lib.timestamp ? Number(lib.timestamp) : Date.now(),
-      // If we are just listing libraries, we don't need all products.
-      // But we need to keep the structure compatible.
-      // We return an empty array or a very small sample if it's a list request.
-      products: Array.isArray(lib.products) ? (lib.products.length > 0 ? [lib.products[0]] : []) : [],
-      productCount: Array.isArray(lib.products) ? lib.products.length : 0,
-      excelUrl: lib.excel_url || '',
-      originalLibraryId: lib.original_library_id || null,
-      completedBy: completionMap[lib.id] || []
-    }));
+    const items = libraries.map(lib => {
+      const libId = String(lib.id).toLowerCase();
+      return {
+        id: lib.id,
+        name: lib.name,
+        timestamp: lib.timestamp ? Number(lib.timestamp) : Date.now(),
+        // If we are just listing libraries, we don't need all products.
+        // But we need to keep the structure compatible.
+        // We return an empty array or a very small sample if it's a list request.
+        products: Array.isArray(lib.products) ? (lib.products.length > 0 ? [lib.products[0]] : []) : [],
+        productCount: Array.isArray(lib.products) ? lib.products.length : 0,
+        excelUrl: lib.excel_url || '',
+        originalLibraryId: lib.original_library_id || (lib as any).originallibraryid || null,
+        completedBy: completionMap[libId] || []
+      };
+    });
 
     return NextResponse.json(items);
   } catch (error: any) {
@@ -86,12 +95,12 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // 1. Upload the original Excel file to Vercel Blob
-    const excelUrl = await uploadToBlob(`libraries/${id}.xlsx`, buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    // 1. Upload the original Excel file to Cloudflare R2
+    const excelUrl = await uploadToBlob(`libraries/${id}.xlsx`, buffer as any, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 
     // 2. Process images and extract data
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer);
+    await workbook.xlsx.load(buffer as any);
     const worksheet = workbook.getWorksheet(1);
     if (!worksheet) throw new Error('No worksheet found');
 
@@ -99,9 +108,9 @@ export async function POST(req: NextRequest) {
     const imageMap: Record<string, string> = {};
     const rowImageMap: Record<number, string[]> = {};
 
-    // Parallel upload images to Blob
+    // Parallel upload images to R2
     const imageUploadPromises = images.map(async (img) => {
-      const imgData = workbook.getImage(img.imageId);
+      const imgData = workbook.getImage(img.imageId as any);
       if (!imgData.buffer) return;
 
       const row = Math.floor(img.range.tl.nativeRow);
@@ -122,7 +131,8 @@ export async function POST(req: NextRequest) {
     const workbookXLSX = XLSX.read(buffer, { type: 'buffer' });
     const sheetName = workbookXLSX.SheetNames[0];
     const worksheetXLSX = workbookXLSX.Sheets[sheetName];
-    const rawData = XLSX.utils.sheet_to_json(worksheetXLSX, { header: 1, defval: "" }) as any[][];
+    // 修复：指定 raw: false 以确保获取格式化后的值（如价格数字）
+    const rawData = XLSX.utils.sheet_to_json(worksheetXLSX, { header: 1, defval: "", raw: false }) as any[][];
     
     if (rawData.length === 0) throw new Error('Excel is empty');
     
@@ -223,12 +233,11 @@ export async function DELETE(req: NextRequest) {
     // 1. Delete from Blob
     await deleteFromBlob(lib.excel_url);
     
-    // Delete images (we don't have a list of all image URLs easily, 
-    // but we can extract them from the products JSON)
+    // Delete images from R2
     const imageUrls = new Set<string>();
     lib.products.forEach((p: any) => {
       Object.values(p).forEach((val: any) => {
-        if (typeof val === 'string' && val.includes('public.blob.vercel-storage.com')) {
+        if (typeof val === 'string' && isR2Url(val)) {
           imageUrls.add(val);
         }
       });

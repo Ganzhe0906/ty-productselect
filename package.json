@@ -10,13 +10,14 @@
     "localize": "node scripts/localize-images.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.967.0",
     "@google/generative-ai": "^0.24.1",
-    "@vercel/blob": "^1.1.1",
     "@vercel/postgres": "^0.10.0",
     "autoprefixer": "^10.4.23",
     "axios": "^1.13.3",
     "cli-progress": "^3.12.0",
     "clsx": "^2.1.0",
+    "dotenv": "^17.2.4",
     "exceljs": "^4.4.0",
     "framer-motion": "^11.0.3",
     "fs-extra": "^11.3.3",
