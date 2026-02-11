@@ -12,6 +12,7 @@ export interface LibraryRow {
 }
 
 export async function initDb() {
+  // 1. Create table if not exists
   await sql`
     CREATE TABLE IF NOT EXISTS libraries (
       id UUID PRIMARY KEY,
@@ -24,6 +25,16 @@ export async function initDb() {
       created_by VARCHAR(50)
     );
   `;
+
+  // 2. Add missing columns if table already existed (for backward compatibility)
+  try {
+    await sql`ALTER TABLE libraries ADD COLUMN IF NOT EXISTS original_library_id UUID;`;
+    await sql`ALTER TABLE libraries ADD COLUMN IF NOT EXISTS created_by VARCHAR(50);`;
+  } catch (err) {
+    // If ALTER TABLE ADD COLUMN IF NOT EXISTS is not supported by the version, 
+    // it might throw, but we can ignore it if it's just "column already exists"
+    console.log('Schema update (optional columns) handled');
+  }
 }
 
 export async function getLibraries(type: 'pending' | 'completed') {

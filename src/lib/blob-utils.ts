@@ -17,7 +17,10 @@ const PUBLIC_URL = process.env.R2_PUBLIC_URL;
  */
 export const isR2Url = (url: string) => {
   if (!url || !PUBLIC_URL) return false;
-  return url.startsWith(PUBLIC_URL);
+  
+  // 更加宽松的匹配逻辑：忽略协议(http/https)和末尾斜杠
+  const normalize = (u: string) => u.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  return normalize(url).startsWith(normalize(PUBLIC_URL));
 };
 
 /**
@@ -45,13 +48,16 @@ export async function deleteFromBlob(url: string) {
   
   // 如果是旧的 Vercel Blob 链接，直接忽略
   if (!isR2Url(url)) {
-    console.log('Skipping delete for non-R2 URL:', url);
+    console.log('[R2] Skipping delete for non-R2 URL:', url);
     return;
   }
 
   try {
-    // 确保 Key 不包含域名部分
-    const key = url.replace(`${PUBLIC_URL}/`, '');
+    // 使用 URL 对象更准确地提取路径作为 Key
+    const urlObj = new URL(url);
+    // pathname 通常以 / 开头，S3 的 Key 不需要开头的 /
+    const key = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
+    
     console.log(`[R2] Attempting to delete key: ${key}`);
     
     const command = new DeleteObjectCommand({
@@ -76,7 +82,8 @@ export async function copyBlob(sourceUrl: string, destinationPath: string) {
       throw new Error('Cannot copy from non-R2 source');
     }
 
-    const sourceKey = sourceUrl.replace(`${PUBLIC_URL}/`, '');
+    const urlObj = new URL(sourceUrl);
+    const sourceKey = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
     
     const command = new CopyObjectCommand({
       Bucket: BUCKET_NAME,

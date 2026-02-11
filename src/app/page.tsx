@@ -553,7 +553,10 @@ export default function Home() {
           body: formData,
         });
 
-        if (!saveResponse.ok) throw new Error('保存到库失败');
+        if (!saveResponse.ok) {
+          const errorData = await saveResponse.json().catch(() => ({}));
+          throw new Error(errorData.error || '保存到库失败');
+        }
         setLocalizeStatus('✅ 已成功导入待选品库并保存到本地！');
         
         // 如果当前正在待选品库视图，则刷新列表

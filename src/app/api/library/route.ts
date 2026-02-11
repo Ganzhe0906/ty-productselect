@@ -99,42 +99,64 @@ export async function POST(req: NextRequest) {
     const excelUrl = await uploadToBlob(`libraries/${id}.xlsx`, buffer as any, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 
     // 2. Process images and extract data
+    console.log(`[Library] Processing file: ${fileName}, size: ${buffer.length} bytes`);
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as any);
+    try {
+      await workbook.xlsx.load(buffer as any);
+    } catch (err: any) {
+      console.error('[Library] ExcelJS load error:', err);
+      throw new Error(`无法解析 Excel 文件内容 (ExcelJS): ${err.message}`);
+    }
+
     const worksheet = workbook.getWorksheet(1);
-    if (!worksheet) throw new Error('No worksheet found');
+    if (!worksheet) throw new Error('Excel 文件中未找到有效的工作表');
 
     const images = worksheet.getImages();
+    console.log(`[Library] Found ${images.length} images in worksheet`);
+    
     const imageMap: Record<string, string> = {};
     const rowImageMap: Record<number, string[]> = {};
 
     // Parallel upload images to R2
-    const imageUploadPromises = images.map(async (img) => {
-      const imgData = workbook.getImage(img.imageId as any);
-      if (!imgData.buffer) return;
+    if (images.length > 0) {
+      console.log(`[Library] Uploading ${images.length} images to R2...`);
+      const imageUploadPromises = images.map(async (img) => {
+        try {
+          const imgData = workbook.getImage(img.imageId as any);
+          if (!imgData.buffer) return;
 
-      const row = Math.floor(img.range.tl.nativeRow);
-      const col = Math.floor(img.range.tl.nativeCol);
-      const ext = imgData.extension || 'png';
-      const imgPath = `images/${id}/${row}_${col}_${img.imageId}.${ext}`;
-      
-      const blobUrl = await uploadToBlob(imgPath, Buffer.from(imgData.buffer as any), `image/${ext}`);
-      
-      imageMap[`${row}_${col}`] = blobUrl;
-      if (!rowImageMap[row]) rowImageMap[row] = [];
-      rowImageMap[row].push(blobUrl);
-    });
+          const row = Math.floor(img.range.tl.nativeRow);
+          const col = Math.floor(img.range.tl.nativeCol);
+          const ext = imgData.extension || 'png';
+          const imgPath = `images/${id}/${row}_${col}_${img.imageId}.${ext}`;
+          
+          const blobUrl = await uploadToBlob(imgPath, Buffer.from(imgData.buffer as any), `image/${ext}`);
+          
+          imageMap[`${row}_${col}`] = blobUrl;
+          if (!rowImageMap[row]) rowImageMap[row] = [];
+          rowImageMap[row].push(blobUrl);
+        } catch (imgErr) {
+          console.error('[Library] Image upload skip:', imgErr);
+        }
+      });
 
-    await Promise.all(imageUploadPromises);
+      await Promise.all(imageUploadPromises);
+    }
 
     // 3. Parse data using XLSX
-    const workbookXLSX = XLSX.read(buffer, { type: 'buffer' });
-    const sheetName = workbookXLSX.SheetNames[0];
-    const worksheetXLSX = workbookXLSX.Sheets[sheetName];
-    // 修复：指定 raw: false 以确保获取格式化后的值（如价格数字）
-    const rawData = XLSX.utils.sheet_to_json(worksheetXLSX, { header: 1, defval: "", raw: false }) as any[][];
+    let rawData: any[][] = [];
+    try {
+      const workbookXLSX = XLSX.read(buffer, { type: 'buffer' });
+      const sheetName = workbookXLSX.SheetNames[0];
+      const worksheetXLSX = workbookXLSX.Sheets[sheetName];
+      // 修复：指定 raw: false 以确保获取格式化后的值（如价格数字）
+      rawData = XLSX.utils.sheet_to_json(worksheetXLSX, { header: 1, defval: "", raw: false }) as any[][];
+    } catch (err: any) {
+      console.error('[Library] XLSX read error:', err);
+      throw new Error(`无法读取表格数据 (XLSX): ${err.message}`);
+    }
     
-    if (rawData.length === 0) throw new Error('Excel is empty');
+    if (rawData.length === 0) throw new Error('Excel 文件内容为空');
     
     const headers = rawData[0] as string[];
     const rows = rawData.slice(1);
@@ -230,22 +252,40 @@ export async function DELETE(req: NextRequest) {
     const lib = await getLibraryById(id);
     if (!lib) return NextResponse.json({ error: 'Library not found' }, { status: 404 });
 
-    // 1. Delete from Blob
-    await deleteFromBlob(lib.excel_url);
+    // 1. Delete the Excel file associated with this record
+    if (lib.excel_url) {
+      console.log(`[Delete] Removing Excel file from R2: ${lib.excel_url}`);
+      await deleteFromBlob(lib.excel_url);
+    }
     
-    // Delete images from R2
-    const imageUrls = new Set<string>();
-    lib.products.forEach((p: any) => {
-      Object.values(p).forEach((val: any) => {
-        if (typeof val === 'string' && isR2Url(val)) {
-          imageUrls.add(val);
+    // 2. ONLY delete images if we are deleting a 'pending' library (the source)
+    if (lib.type === 'pending') {
+      console.log(`[Delete] Library is 'pending', cleaning up all associated images on R2...`);
+      const imageUrls = new Set<string>();
+      if (Array.isArray(lib.products)) {
+        lib.products.forEach((p: any) => {
+          Object.values(p).forEach((val: any) => {
+            if (typeof val === 'string' && isR2Url(val)) {
+              imageUrls.add(val);
+            }
+          });
+        });
+      }
+      
+      if (imageUrls.size > 0) {
+        console.log(`[Delete] Found ${imageUrls.size} unique R2 images to delete`);
+        // Batch delete to avoid hitting rate limits or connection issues
+        const urls = Array.from(imageUrls);
+        for (let i = 0; i < urls.length; i += 20) {
+          const batch = urls.slice(i, i + 20);
+          await Promise.all(batch.map(url => deleteFromBlob(url)));
         }
-      });
-    });
-    
-    await Promise.all(Array.from(imageUrls).map(url => deleteFromBlob(url)));
+      }
+    } else {
+      console.log(`[Delete] Library type is '${lib.type}', skipping image deletion to keep references intact.`);
+    }
 
-    // 2. Delete from Postgres
+    // 3. Delete from Postgres
     await deleteLibrary(id);
 
     return NextResponse.json({ success: true });
