@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ExcelJS from 'exceljs';
-import { getLibraries, initDb } from '@/lib/db';
+import { getLibraries, initDb, getLibraryById } from '@/lib/db';
 import axios from 'axios';
 
 export async function POST(req: NextRequest) {
@@ -12,7 +12,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Original Library ID is required' }, { status: 400 });
     }
 
-    // 1. 获取该母库对应的所有完成记录
+    // 1. 获取母库以提取原始表头顺序
+    const motherLib = await getLibraryById(originalLibraryId);
+    if (!motherLib) {
+      throw new Error('未找到母库信息，无法确定表头顺序');
+    }
+
+    // 从母库第一个商品中提取原始表头顺序
+    const originalHeaders: string[] = [];
+    if (motherLib.products && motherLib.products.length > 0) {
+      Object.keys(motherLib.products[0]).forEach(key => {
+        if (!key.startsWith('_')) originalHeaders.push(key);
+      });
+    }
+
+    // 2. 获取该母库对应的所有完成记录
     const allCompleted = await getLibraries('completed');
     
     let flzLib = null;
@@ -41,65 +55,103 @@ export async function POST(req: NextRequest) {
       throw new Error(`未找到双人的完整选品记录 (母库 ID: ${originalLibraryId})`);
     }
 
-    // 2. 取交集逻辑：比对 _index
+    // 3. 取交集逻辑：比对 _index，并从母库中提取完整数据
     const flzIndexes = new Set(flzLib.products.map((p: any) => p._index));
-    const combinedProducts = lyyLib.products.filter((p: any) => flzIndexes.has(p._index));
+    const commonIndexes = new Set(lyyLib.products.filter((p: any) => flzIndexes.has(p._index)).map((p: any) => p._index));
 
-    if (combinedProducts.length === 0) {
+    if (commonIndexes.size === 0) {
       throw new Error('双人选品没有重合项');
     }
 
-    // 3. 生成 Excel
+    // 从母库中提取完整的商品数据，确保包含所有 AI 翻译字段
+    const combinedProducts = motherLib.products.filter((p: any) => commonIndexes.has(p._index));
+
+    // 4. 下载并解析母库原始 Excel 文件以保持完美排版
+    const fileResponse = await axios.get(motherLib.excel_url, { responseType: 'arraybuffer' });
+    const motherBuffer = Buffer.from(fileResponse.data);
+    
+    const sourceWorkbook = new ExcelJS.Workbook();
+    await sourceWorkbook.xlsx.load(motherBuffer);
+    const sourceSheet = sourceWorkbook.getWorksheet(1);
+    if (!sourceSheet) throw new Error('母库文件解析失败');
+
+    // 5. 创建新的工作簿并复制样式和数据
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('双人共同选中');
-    
-    // 获取表头（从第一个商品对象的 key 中提取，排除隐藏字段）
-    const allKeys = new Set<string>();
-    combinedProducts.forEach((p: any) => {
-      Object.keys(p).forEach(k => {
-        if (!k.startsWith('_')) allKeys.add(k);
-      });
+
+    // 复制表头和列宽
+    const headerRow = sourceSheet.getRow(1);
+    headerRow.eachCell((cell, colNumber) => {
+      worksheet.getColumn(colNumber).width = sourceSheet.getColumn(colNumber).width || 20;
+      const targetCell = worksheet.getRow(1).getCell(colNumber);
+      targetCell.value = cell.value;
+      targetCell.style = cell.style;
     });
-    
-    const keys = Array.from(allKeys);
-    worksheet.columns = keys.map(key => ({
-      header: key,
-      key: key,
-      width: (key === '中文商品名' || key === '场景用途') ? 30 : 25
-    }));
 
-    // 添加数据行
-    for (let i = 0; i < combinedProducts.length; i++) {
-      const p = combinedProducts[i];
-      const row = worksheet.addRow(p);
-      row.height = 100;
-      
-      // 处理图片
-      const imageUrl = p['主图src'] || p.src || '';
-      if (imageUrl && imageUrl.startsWith('http')) {
-        try {
-          const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-          const imageBuffer = Buffer.from(response.data);
-          const extension = imageUrl.toLowerCase().includes('.png') ? 'png' : 'jpeg';
-          
-          const imageId = workbook.addImage({
-            buffer: imageBuffer,
-            extension: extension as 'png' | 'jpeg',
+    // 寻找数据行并填充
+    let currentRowIndex = 2;
+    sourceSheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // 跳过表头
+
+      if (commonIndexes.has(rowNumber)) {
+        const newRow = worksheet.getRow(currentRowIndex);
+        newRow.height = row.height || 100;
+        
+        // 复制这一行的所有单元格数据和样式
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          const newCell = newRow.getCell(colNumber);
+          newCell.value = cell.value;
+          newCell.style = cell.style;
+        });
+        
+        currentRowIndex++;
+      }
+    });
+
+    // 6. 安全地克隆图片
+    const sourceImages = sourceSheet.getImages();
+    // 构建行号映射关系
+    const rowMapping: Record<number, number> = {};
+    let mappingIndex = 2;
+    sourceSheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (commonIndexes.has(rowNumber)) {
+        rowMapping[rowNumber] = mappingIndex++;
+      }
+    });
+
+    sourceImages.forEach(img => {
+      const sourceRow = Math.floor(img.range.tl.nativeRow) + 1;
+      if (commonIndexes.has(sourceRow)) {
+        const targetRow = rowMapping[sourceRow];
+        const imgData = sourceWorkbook.getImage(img.imageId as any);
+        
+        const newImageId = workbook.addImage({
+          buffer: Buffer.from(imgData.buffer as any),
+          extension: imgData.extension,
+        });
+
+        // 核心修复：增加安全检查，防止 br 为 undefined 导致的崩溃
+        const tl = img.range.tl;
+        const br = img.range.br;
+
+        if (br) {
+          // 如果有结束坐标，按原样比例克隆
+          worksheet.addImage(newImageId, {
+            tl: { col: tl.nativeCol, row: targetRow - 1 + (tl.nativeRow % 1) } as any,
+            br: { col: br.nativeCol, row: targetRow - 1 + (br.nativeRow % 1) } as any,
+            editAs: 'oneCell'
           });
-
-          worksheet.addImage(imageId, {
-            tl: { col: 0, row: i + 1 },
+        } else {
+          // 如果没有结束坐标（单单元格锚定），手动指定大小
+          worksheet.addImage(newImageId, {
+            tl: { col: tl.nativeCol, row: targetRow - 1 + (tl.nativeRow % 1) } as any,
             ext: { width: 120, height: 120 },
             editAs: 'oneCell'
           });
-          
-          // 清除单元格文字，只留图片
-          row.getCell(1).value = ' ';
-        } catch (e) {
-          console.error('图片下载失败:', imageUrl);
         }
       }
-    }
+    });
 
     const buffer = await workbook.xlsx.writeBuffer();
     

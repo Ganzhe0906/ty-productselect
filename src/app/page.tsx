@@ -75,7 +75,9 @@ export default function Home() {
     row: number;
     file: File;
     isSaveToLibrary: boolean;
+    isValid: boolean;
   } | null>(null);
+  const [confirmCountdown, setConfirmCountdown] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentFileName, setCurrentFileName] = useState<string>('');
   const [currentLibraryId, setCurrentLibraryId] = useState<string | null>(null);
@@ -104,6 +106,28 @@ export default function Home() {
     }
     window.scrollTo(0, 0);
   }, [view]);
+
+  // Handle confirm countdown
+  useEffect(() => {
+    if (confirmCountdown <= 0 || !showConfirmModal || !confirmData) return;
+
+    const timer = setInterval(() => {
+      setConfirmCountdown(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          // 自动触发确认逻辑
+          setShowConfirmModal(false);
+          if (confirmData) {
+            processLocalize(confirmData.file, confirmData.isSaveToLibrary, true);
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [confirmCountdown, showConfirmModal, confirmData]);
 
   useEffect(() => {
     setMounted(true);
@@ -355,15 +379,26 @@ export default function Home() {
         }
 
         const foundCol = priceColIndex !== -1 ? headers[priceColIndex] : '未知列';
-        const foundPrice = priceColIndex !== -1 ? String(rows[0][priceColIndex] || '无数据') : '未找到';
+        const foundPrice = priceColIndex !== -1 ? String(rows[0][priceColIndex] || '无数据').trim() : '未找到';
+
+        // 校验价格有效性：支持数字、货币符号、点、空格和连字符（区间）
+        const isValid = /^[\d.$\s€£¥\-]+$/.test(foundPrice) && /\d/.test(foundPrice);
 
         setConfirmData({
           price: foundPrice,
           column: foundCol,
           row: 2, // 第一行是表头，所以第一个数据行是第2行
           file,
-          isSaveToLibrary: saveToLib
+          isSaveToLibrary: saveToLib,
+          isValid
         });
+        
+        if (isValid) {
+          setConfirmCountdown(10);
+        } else {
+          setConfirmCountdown(0);
+        }
+        
         setShowConfirmModal(true);
         return; // 暂停，等待用户在弹窗中确认
       } catch (err: any) {
@@ -1953,9 +1988,15 @@ export default function Home() {
                   <AlertCircle size={32} />
                 </div>
                 <h3 className="text-xl font-black text-black mb-2">确认数据识别</h3>
-                <p className="text-sm text-[#8E8E93] font-medium mb-6">请检查系统自动识别的首条价格数据</p>
+                <p className="text-sm text-[#8E8E93] font-medium mb-6">
+                  {confirmData.isValid 
+                    ? '识别成功，系统将在倒计时结束后自动开始' 
+                    : '检测到非标准价格格式，请您人工判断确认'}
+                </p>
 
-                <div className="bg-gray-50 rounded-2xl p-5 text-left space-y-3 border border-gray-100 mb-8">
+                <div className={`bg-gray-50 rounded-2xl p-5 text-left space-y-3 border mb-8 transition-colors ${
+                  confirmData.isValid ? 'border-gray-100' : 'border-yellow-200 bg-yellow-50/30'
+                }`}>
                   <div className="flex justify-between items-center">
                     <span className="text-xs text-[#8E8E93]">识别列名</span>
                     <span className="text-sm font-bold text-black">{confirmData.column}</span>
@@ -1966,7 +2007,16 @@ export default function Home() {
                   </div>
                   <div className="pt-2 border-t border-gray-200 flex justify-between items-center">
                     <span className="text-xs text-[#8E8E93]">首条价格数据</span>
-                    <span className="text-lg font-black text-[#007AFF]">{confirmData.price}</span>
+                    <div className="text-right">
+                      <span className={`text-lg font-black ${confirmData.isValid ? 'text-[#007AFF]' : 'text-yellow-600'}`}>
+                        {confirmData.price}
+                      </span>
+                      {!confirmData.isValid && (
+                        <div className="text-[9px] text-yellow-600 font-bold mt-0.5 flex items-center justify-end gap-1">
+                          <AlertCircle size={10} /> 非纯数字格式
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -1975,6 +2025,7 @@ export default function Home() {
                     onClick={() => {
                       setShowConfirmModal(false);
                       setConfirmData(null);
+                      setConfirmCountdown(0);
                     }}
                     className="py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold text-sm hover:bg-gray-200 transition-colors"
                   >
@@ -1986,10 +2037,21 @@ export default function Home() {
                       if (confirmData) {
                         processLocalize(confirmData.file, confirmData.isSaveToLibrary, true);
                       }
+                      setConfirmCountdown(0);
                     }}
-                    className="py-4 bg-[#007AFF] text-white rounded-2xl font-bold text-sm hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20"
+                    className="py-4 bg-[#007AFF] text-white rounded-2xl font-bold text-sm hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20 relative overflow-hidden"
                   >
-                    确认开始
+                    <span className="relative z-10">
+                      确认开始 {confirmCountdown > 0 && `(${confirmCountdown}s)`}
+                    </span>
+                    {confirmCountdown > 0 && (
+                      <motion.div 
+                        initial={{ scaleX: 0 }}
+                        animate={{ scaleX: 1 }}
+                        transition={{ duration: 10, ease: "linear" }}
+                        className="absolute bottom-0 left-0 h-1 bg-white/30 w-full origin-left"
+                      />
+                    )}
                   </button>
                 </div>
               </div>

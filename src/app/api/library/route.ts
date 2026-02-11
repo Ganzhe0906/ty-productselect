@@ -95,10 +95,7 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // 1. Upload the original Excel file to Cloudflare R2
-    const excelUrl = await uploadToBlob(`libraries/${id}.xlsx`, buffer as any, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-
-    // 2. Process images and extract data
+    // 1. 解析原始 Excel (提取图片)
     console.log(`[Library] Processing file: ${fileName}, size: ${buffer.length} bytes`);
     const workbook = new ExcelJS.Workbook();
     try {
@@ -114,42 +111,34 @@ export async function POST(req: NextRequest) {
     const images = worksheet.getImages();
     console.log(`[Library] Found ${images.length} images in worksheet`);
     
-    const imageMap: Record<string, string> = {};
-    const rowImageMap: Record<number, string[]> = {};
+    const rowImageMap: Record<number, { buffer: Buffer, ext: string }> = {};
 
-    // Parallel upload images to R2
+    // 提取图片 Buffer (暂不上传 R2，等下直接嵌入新表)
     if (images.length > 0) {
-      console.log(`[Library] Uploading ${images.length} images to R2...`);
-      const imageUploadPromises = images.map(async (img) => {
+      images.forEach((img) => {
         try {
           const imgData = workbook.getImage(img.imageId as any);
           if (!imgData.buffer) return;
-
           const row = Math.floor(img.range.tl.nativeRow);
-          const col = Math.floor(img.range.tl.nativeCol);
-          const ext = imgData.extension || 'png';
-          const imgPath = `images/${id}/${row}_${col}_${img.imageId}.${ext}`;
-          
-          const blobUrl = await uploadToBlob(imgPath, Buffer.from(imgData.buffer as any), `image/${ext}`);
-          
-          imageMap[`${row}_${col}`] = blobUrl;
-          if (!rowImageMap[row]) rowImageMap[row] = [];
-          rowImageMap[row].push(blobUrl);
+          // 我们只存每一行的第一张图
+          if (!rowImageMap[row]) {
+            rowImageMap[row] = { 
+              buffer: Buffer.from(imgData.buffer as any), 
+              ext: imgData.extension || 'png' 
+            };
+          }
         } catch (imgErr) {
-          console.error('[Library] Image upload skip:', imgErr);
+          console.error('[Library] Image extraction skip:', imgErr);
         }
       });
-
-      await Promise.all(imageUploadPromises);
     }
 
-    // 3. Parse data using XLSX
+    // 2. 解析表格数据 (仅提取识别出的字段)
     let rawData: any[][] = [];
     try {
       const workbookXLSX = XLSX.read(buffer, { type: 'buffer' });
       const sheetName = workbookXLSX.SheetNames[0];
       const worksheetXLSX = workbookXLSX.Sheets[sheetName];
-      // 修复：指定 raw: false 以确保获取格式化后的值（如价格数字）
       rawData = XLSX.utils.sheet_to_json(worksheetXLSX, { header: 1, defval: "", raw: false }) as any[][];
     } catch (err: any) {
       console.error('[Library] XLSX read error:', err);
@@ -158,66 +147,113 @@ export async function POST(req: NextRequest) {
     
     if (rawData.length === 0) throw new Error('Excel 文件内容为空');
     
-    const headers = rawData[0] as string[];
+    const originalHeaders = rawData[0] as string[];
     const rows = rawData.slice(1);
     
-    const knownImageHeaders = ['主图src', 'src'];
-    const imageColIndices: number[] = [];
-    headers.forEach((h, i) => {
+    // 识别目标字段
+    const targetFields: { index: number, key: string }[] = [];
+    originalHeaders.forEach((h, i) => {
       const cleanH = String(h || '').trim();
-      if (knownImageHeaders.includes(cleanH) || cleanH.toLowerCase().includes('src')) {
-        imageColIndices.push(i);
+      for (const [standardKey, aliases] of Object.entries(FIELD_ALIASES)) {
+        if (aliases.includes(cleanH) || cleanH === standardKey) {
+          targetFields.push({ index: i, key: standardKey });
+          break;
+        }
       }
     });
-    if (imageColIndices.length === 0 && headers.length > 0) imageColIndices.push(0);
 
-    const products = rows.map((row, rowIndex) => {
-      const product: any = { _index: rowIndex + 2 };
-      const actualRowInExcel = rowIndex + 1;
+    // 3. 构建“纯净版母库” Excel
+    const cleanWorkbook = new ExcelJS.Workbook();
+    const cleanSheet = cleanWorkbook.addWorksheet('待选品库');
+    
+    // 设置表头 (增加一列“主图”放在最前面)
+    const finalHeaders = ['主图', ...targetFields.map(f => f.key)];
+    cleanSheet.columns = finalHeaders.map(h => ({
+      header: h,
+      key: h,
+      width: h === '主图' ? 20 : 25
+    }));
 
-      headers.forEach((header, colIndex) => {
-        const value = row[colIndex];
-        const cleanHeader = String(header || '').trim();
-        
-        if (typeof value === 'string' && (value.startsWith('http') || value.includes('<img'))) {
-          product[cleanHeader] = ' ';
-        } else {
-          product[cleanHeader] = value;
-        }
-        
-        for (const [standardKey, aliases] of Object.entries(FIELD_ALIASES)) {
-          if (aliases.includes(cleanHeader)) {
-            product[standardKey] = product[cleanHeader];
-          }
-        }
+    const products: any[] = [];
+    const uploadPromises: Promise<string>[] = [];
 
-        let localPath = imageMap[`${actualRowInExcel}_${colIndex}`];
-        if (!localPath && imageColIndices.includes(colIndex)) {
-          if (rowImageMap[actualRowInExcel] && rowImageMap[actualRowInExcel].length > 0) {
-            localPath = rowImageMap[actualRowInExcel][0];
-          }
-        }
-
-        if (localPath) {
-          product[cleanHeader] = localPath;
-          if (cleanHeader === '主图src' || cleanHeader === 'src' || (colIndex === imageColIndices[0])) {
-            product['主图src'] = localPath;
-          }
-        }
+    // 填充数据并处理图片
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const excelRowIndex = i + 2; // Excel 中的行号 (1-based, header is 1)
+      const dataRow: any = {};
+      
+      // 提取目标字段数据
+      targetFields.forEach(f => {
+        dataRow[f.key] = row[f.index];
       });
-      
-      if (!product['主图src'] && rowImageMap[actualRowInExcel] && rowImageMap[actualRowInExcel].length > 0) {
-        product['主图src'] = rowImageMap[actualRowInExcel][0];
+
+      const newRow = cleanSheet.addRow({
+        ...dataRow,
+        '主图': ' ' // 留空用于放图片
+      });
+      newRow.height = 100;
+
+      // 处理图片：上传到 R2 并嵌入新 Excel
+      const imgInfo = rowImageMap[i + 1]; // 原始表的行索引 (0-based, row 1 is 0)
+      if (imgInfo) {
+        const imgPath = `images/${id}/${i}_0.png`;
+        const uploadPromise = uploadToBlob(imgPath, imgInfo.buffer, `image/${imgInfo.ext}`);
+        uploadPromises.push(uploadPromise);
+
+        // 嵌入图片到新表
+        const imageId = cleanWorkbook.addImage({
+          buffer: imgInfo.buffer,
+          extension: imgInfo.ext as any,
+        });
+        cleanSheet.addImage(imageId, {
+          tl: { col: 0, row: i + 1 },
+          ext: { width: 120, height: 120 },
+          editAs: 'oneCell'
+        });
+
+        // 在数据库 JSON 中记录 R2 URL (使用私有属性 _image_url)
+        // 这样在导出时不会作为一列出现，但在 UI 上可以显示
+        dataRow._image_url = `PENDING_URL_${i}`; 
       }
-      
-      if (!product['类目'] && (product['商品一级分类'] || product['商品二级分类'])) {
-        product['类目'] = [product['商品一级分类'], product['商品二级分类'], product['商品三级分类']].filter(Boolean).join(' > ');
+
+      products.push({
+        ...dataRow,
+        _index: excelRowIndex
+      });
+    }
+
+    // 等待所有图片上传完成，并替换占位符
+    const r2Urls = await Promise.all(uploadPromises);
+    products.forEach((p, idx) => {
+      if (p._image_url && p._image_url.startsWith('PENDING_URL_')) {
+        const urlIdx = parseInt(p._image_url.replace('PENDING_URL_', ''));
+        // 注意：这里由于是异步上传，顺序可能不对，需要更稳妥的映射。
+        // 简单起见，重新跑一遍上传逻辑或使用 Map。
       }
-      
-      return product;
     });
 
-    // 4. Save metadata to Postgres
+    // 修正：使用 Map 确保 URL 对应正确
+    const actualR2Urls = await Promise.all(
+      products.map(async (p, i) => {
+        const imgInfo = rowImageMap[i + 1];
+        if (imgInfo) {
+          const imgPath = `images/${id}/${i}_0.${imgInfo.ext}`;
+          return await uploadToBlob(imgPath, imgInfo.buffer, `image/${imgInfo.ext}`);
+        }
+        return null;
+      })
+    );
+    
+    products.forEach((p, i) => {
+      if (actualR2Urls[i]) p._image_url = actualR2Urls[i];
+    });
+
+    // 4. 上传纯净版母库 Excel 到 R2
+    const cleanBuffer = await cleanWorkbook.xlsx.writeBuffer();
+    const excelUrl = await uploadToBlob(`libraries/${id}.xlsx`, Buffer.from(cleanBuffer as ArrayBuffer), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+    // 5. 保存元数据到 Postgres
     const libraryData = {
       id,
       name: fileName,

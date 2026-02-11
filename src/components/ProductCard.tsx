@@ -20,7 +20,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
 
   // 提取图片 URL 的辅助函数
   const getImageUrl = (product: any) => {
-    const src = product['主图src'] || product.src || product['主图'] || product['图片'];
+    // 优先从私有属性 _image_url 中读取 R2 永久链接
+    const src = product._image_url || product['主图src'] || product.src || product['主图'] || product['图片'];
     
     if (!src) return '';
     
