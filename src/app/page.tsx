@@ -3,7 +3,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Product, exportToExcel } from '@/lib/excel';
 import { ProductCard } from '@/components/ProductCard';
-import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check, X, Loader2, Archive, Library, Trash2, Edit2, Users } from 'lucide-react';
+import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check, X, Loader2, Archive, Library, Trash2, Edit2, Users, Layers, Zap, Sparkles, Layout } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { saveToPending, saveToCompleted, getPendingLibrary, getCompletedLibrary, deletePendingItem, deleteCompletedItem, LibraryItem, getLibraryDetail, renameLibrary } from '@/lib/storage';
 import * as XLSX from 'xlsx';
@@ -67,6 +67,16 @@ export default function Home() {
   const [isLibraryLoading, setIsLibraryLoading] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [isImportingToLibrary, setIsImportingToLibrary] = useState(false);
+  const [showModeModal, setShowModeModal] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmData, setConfirmData] = useState<{
+    price: string;
+    column: string;
+    row: number;
+    file: File;
+    isSaveToLibrary: boolean;
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentFileName, setCurrentFileName] = useState<string>('');
   const [currentLibraryId, setCurrentLibraryId] = useState<string | null>(null);
   const [currentLibraryType, setCurrentLibraryType] = useState<'pending' | 'completed' | null>(null);
@@ -312,8 +322,57 @@ export default function Home() {
     }
   };
 
-  const processLocalize = async (file: File, saveToLib: boolean = false) => {
-    console.log('开始本地化处理 (前端调度模式):', file.name, 'saveToLibrary:', saveToLib);
+  const processLocalize = async (file: File, saveToLib: boolean = false, skipConfirm: boolean = false) => {
+    console.log('开始本地化处理 (前端调度模式):', file.name, 'saveToLibrary:', saveToLib, 'skipConfirm:', skipConfirm);
+    
+    // 如果没有跳过确认，先进行预览检测
+    if (!skipConfirm) {
+      try {
+        const dataBuffer = await file.arrayBuffer();
+        const workbookXLSX = XLSX.read(dataBuffer, { type: 'array' });
+        const sheetName = workbookXLSX.SheetNames[0];
+        const worksheetXLSX = workbookXLSX.Sheets[sheetName];
+        const rawData = XLSX.utils.sheet_to_json(worksheetXLSX, { header: 1, defval: "" }) as any[][];
+
+        if (rawData.length < 2) throw new Error('Excel 文件数据不足');
+
+        const headers = rawData[0] as string[];
+        const rows = rawData.slice(1);
+
+        // 寻找价格字段
+        const priceKeywords = ['价格', '售价', 'price', 'selling_price', '金额'];
+        let priceColIndex = headers.findIndex(h => priceKeywords.some(k => String(h).includes(k)));
+        
+        // 如果没找到带关键字的，找第一个看起来像数字或带货币符号的列
+        if (priceColIndex === -1) {
+          for (let col = 0; col < headers.length; col++) {
+            const firstVal = String(rows[0][col] || '');
+            if (/[\d.]/.test(firstVal) && !headers[col]?.includes('ID') && !headers[col]?.includes('链接')) {
+              priceColIndex = col;
+              break;
+            }
+          }
+        }
+
+        const foundCol = priceColIndex !== -1 ? headers[priceColIndex] : '未知列';
+        const foundPrice = priceColIndex !== -1 ? String(rows[0][priceColIndex] || '无数据') : '未找到';
+
+        setConfirmData({
+          price: foundPrice,
+          column: foundCol,
+          row: 2, // 第一行是表头，所以第一个数据行是第2行
+          file,
+          isSaveToLibrary: saveToLib
+        });
+        setShowConfirmModal(true);
+        return; // 暂停，等待用户在弹窗中确认
+      } catch (err: any) {
+        console.error('预览检测失败:', err);
+        setError('预览检测失败: ' + err.message);
+        return;
+      }
+    }
+
     setIsLoading(true);
     setError(null);
     setLocalizeProgress(0);
@@ -1267,9 +1326,26 @@ export default function Home() {
                         <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center text-gray-400">
                           <span className="text-lg font-black">1</span>
                         </div>
-                        <div>
-                          <h3 className="font-bold text-black text-sm">采集准备</h3>
-                          <p className="text-[10px] text-[#8E8E93] mt-1 leading-relaxed">在出海匠扒下原始数据</p>
+                        <div className="w-full">
+                          <h3 className="font-bold text-black text-sm mb-3">常见采集渠道</h3>
+                          <div className="space-y-1.5 text-left">
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 bg-gray-300 rounded-full" />
+                              <p className="text-[10px] text-[#8E8E93] font-medium">模式1：出海匠插件扒取</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 bg-gray-300 rounded-full" />
+                              <p className="text-[10px] text-[#8E8E93] font-medium">模式2：出海匠原生导出</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 bg-gray-300 rounded-full" />
+                              <p className="text-[10px] text-[#8E8E93] font-medium">模式3：卖家精灵导出</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 bg-gray-200 rounded-full" />
+                              <p className="text-[10px] text-gray-300 font-medium">模式4：待定</p>
+                            </div>
+                          </div>
                         </div>
                         <div className="flex-1 flex items-end">
                           <span className="text-[9px] font-bold text-gray-300 uppercase tracking-widest px-2 py-0.5 bg-gray-50 rounded-full">外部操作</span>
@@ -1286,19 +1362,22 @@ export default function Home() {
                           <p className="text-[10px] text-[#8E8E93] mt-1 leading-relaxed">固定图片，确保数据永久可用</p>
                         </div>
                         <div className="w-full">
-                          <label 
-                            htmlFor="localize-upload"
-                            className="block w-full bg-[#007AFF] text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/10 text-center"
+                          <button 
+                            onClick={() => setShowModeModal(true)}
+                            className="w-full bg-[#007AFF] text-white py-2.5 rounded-xl font-bold text-xs cursor-pointer hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/10 text-center"
                           >
                             开始转换
-                          </label>
+                          </button>
                           <input 
-                            id="localize-upload"
+                            ref={fileInputRef}
                             type="file" 
                             accept=".xlsx, .xls" 
                             onChange={(e) => {
                               const file = e.target.files?.[0];
-                              if (file) processLocalize(file, true);
+                              if (file) {
+                                processLocalize(file, true);
+                              }
+                              e.target.value = '';
                             }} 
                             className="hidden" 
                           />
@@ -1755,6 +1834,163 @@ export default function Home() {
             </div>
           </div>
         )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showModeModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowModeModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white w-full max-w-sm rounded-[32px] overflow-hidden shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-8 text-center">
+                <div className="w-16 h-16 bg-blue-50 rounded-3xl flex items-center justify-center text-[#007AFF] mx-auto mb-6">
+                  <Layers size={32} />
+                </div>
+                <h3 className="text-xl font-black text-black mb-2">选择转换模式</h3>
+                <p className="text-sm text-[#8E8E93] font-medium mb-8">请选择适合您原始数据的处理模式</p>
+
+                <div className="grid grid-cols-1 gap-3">
+                  <button
+                    onClick={() => {
+                      setShowModeModal(false);
+                      setTimeout(() => {
+                        fileInputRef.current?.click();
+                      }, 100);
+                    }}
+                    className="flex items-center gap-4 p-4 bg-blue-50 hover:bg-blue-100 rounded-2xl transition-all group text-left border border-blue-100"
+                  >
+                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-[#007AFF] shadow-sm group-hover:scale-110 transition-transform">
+                      <Zap size={20} />
+                    </div>
+                    <div>
+                      <div className="font-bold text-black text-sm">模式 1：出海匠 + 插件</div>
+                      <div className="text-[10px] text-[#007AFF] font-bold opacity-70">当前推荐：支持图片永久化</div>
+                    </div>
+                  </button>
+
+                  <button
+                    disabled
+                    className="flex items-center gap-4 p-4 bg-gray-50 rounded-2xl text-left border border-gray-100 opacity-60 cursor-not-allowed"
+                  >
+                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-gray-400 shadow-sm">
+                      <Sparkles size={20} />
+                    </div>
+                    <div>
+                      <div className="font-bold text-gray-500 text-sm">模式 2：出海匠原生导出</div>
+                      <div className="text-[10px] text-gray-400 font-bold">暂不可用</div>
+                    </div>
+                  </button>
+
+                  <button
+                    disabled
+                    className="flex items-center gap-4 p-4 bg-gray-50 rounded-2xl text-left border border-gray-100 opacity-60 cursor-not-allowed"
+                  >
+                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-gray-400 shadow-sm">
+                      <Layout size={20} />
+                    </div>
+                    <div>
+                      <div className="font-bold text-gray-500 text-sm">模式 3：卖家精灵 (Amazon)</div>
+                      <div className="text-[10px] text-gray-400 font-bold">暂不可用</div>
+                    </div>
+                  </button>
+
+                  <button
+                    disabled
+                    className="flex items-center gap-4 p-4 bg-gray-50 rounded-2xl text-left border border-gray-100 opacity-40 cursor-not-allowed"
+                  >
+                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-gray-300 shadow-sm">
+                      <Loader2 size={20} />
+                    </div>
+                    <div>
+                      <div className="font-bold text-gray-400 text-sm">模式 4：待开发</div>
+                      <div className="text-[10px] text-gray-300 font-bold">敬请期待</div>
+                    </div>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setShowModeModal(false)}
+                  className="mt-8 w-full py-4 text-[#8E8E93] font-bold text-sm hover:text-black transition-colors"
+                >
+                  取消
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showConfirmModal && confirmData && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[201] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white w-full max-w-sm rounded-[32px] overflow-hidden shadow-2xl"
+            >
+              <div className="p-8 text-center">
+                <div className="w-16 h-16 bg-yellow-50 rounded-3xl flex items-center justify-center text-yellow-500 mx-auto mb-6">
+                  <AlertCircle size={32} />
+                </div>
+                <h3 className="text-xl font-black text-black mb-2">确认数据识别</h3>
+                <p className="text-sm text-[#8E8E93] font-medium mb-6">请检查系统自动识别的首条价格数据</p>
+
+                <div className="bg-gray-50 rounded-2xl p-5 text-left space-y-3 border border-gray-100 mb-8">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-[#8E8E93]">识别列名</span>
+                    <span className="text-sm font-bold text-black">{confirmData.column}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-[#8E8E93]">数据行号</span>
+                    <span className="text-sm font-bold text-black">第 {confirmData.row} 行</span>
+                  </div>
+                  <div className="pt-2 border-t border-gray-200 flex justify-between items-center">
+                    <span className="text-xs text-[#8E8E93]">首条价格数据</span>
+                    <span className="text-lg font-black text-[#007AFF]">{confirmData.price}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => {
+                      setShowConfirmModal(false);
+                      setConfirmData(null);
+                    }}
+                    className="py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold text-sm hover:bg-gray-200 transition-colors"
+                  >
+                    取消转换
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowConfirmModal(false);
+                      if (confirmData) {
+                        processLocalize(confirmData.file, confirmData.isSaveToLibrary, true);
+                      }
+                    }}
+                    className="py-4 bg-[#007AFF] text-white rounded-2xl font-bold text-sm hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20"
+                  >
+                    确认开始
+                  </button>
+                </div>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
