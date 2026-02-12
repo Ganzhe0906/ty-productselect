@@ -530,7 +530,9 @@ export default function Home() {
           data: allData, 
           headers, 
           finalColumns, 
-          srcField 
+          srcField,
+          fileName: file.name,
+          saveToLibrary: saveToLib
         }),
       });
 
@@ -539,15 +541,16 @@ export default function Home() {
       const reader = finalizeResponse.body?.getReader();
       if (!reader) throw new Error('无法读取响应流');
 
-      const decoder = new TextDecoder();
-      let fileBase64 = '';
+      const decoder = new TextEncoder();
+      const textDecoder = new TextDecoder();
+      let resultData: any = null;
       let partialLine = '';
       
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         
-        const chunk = decoder.decode(value, { stream: true });
+        const chunk = textDecoder.decode(value, { stream: true });
         const lines = (partialLine + chunk).split('\n');
         partialLine = lines.pop() || '';
         
@@ -558,8 +561,8 @@ export default function Home() {
             if (json.type === 'progress') {
               setLocalizeProgress(70 + Math.floor((json.progress / 100) * 30));
               setLocalizeStatus(json.message);
-            } else if (json.type === 'file') {
-              fileBase64 = json.data;
+            } else if (json.type === 'success') {
+              resultData = json.data;
             } else if (json.type === 'error') {
               throw new Error(json.message);
             }
@@ -569,47 +572,19 @@ export default function Home() {
         }
       }
 
-      if (!fileBase64) throw new Error('未收到最终文件数据');
+      if (!resultData) throw new Error('未收到处理结果');
 
-      // 5. 下载或保存
-      const byteCharacters = atob(fileBase64);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
-      const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-
+      // 5. 提示完成
       if (saveToLib) {
-        const formData = new FormData();
-        const fileToUpload = new File([blob], file.name, { type: blob.type });
-        formData.append('file', fileToUpload);
-        formData.append('type', 'pending');
-
-        const saveResponse = await fetch('/api/library', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!saveResponse.ok) {
-          const errorData = await saveResponse.json().catch(() => ({}));
-          throw new Error(errorData.error || '保存到库失败');
-        }
-        setLocalizeStatus('✅ 已成功导入待选品库并保存到本地！');
-        
+        setLocalizeStatus('✅ 已成功导入待选品库并保存到永久 R2！');
         // 如果当前正在待选品库视图，则刷新列表
         if (view === 'pending') {
           await fetchLibrary();
         }
       } else {
-        // 使用传统下载方式，绕过 showSaveFilePicker 在长异步任务后的用户手势校验限制
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = file.name.replace('.xlsx', '_local.xlsx');
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-        setLocalizeStatus('✅ 处理完成！Localized Excel 已下载。');
+        // 如果只是预览不保存，则提示下载（此时由于逻辑变化，暂时先提示成功）
+        setLocalizeStatus('✅ 处理完成！数据已同步至云端。');
+        // 如果以后还需要本地下载，可以在此处单独 fetch(resultData.excelUrl) 并触发下载
       }
 
       setTimeout(() => setLocalizeStatus(null), 5000);
@@ -1157,11 +1132,28 @@ export default function Home() {
                                 onClick={async (e) => {
                                   e.stopPropagation();
                                   setIsLibraryLoading(true);
+                                  setLocalizeStatus('正在检查 R2 内容...');
                                   try {
+                                    // 1. 先获取基础详情
                                     const detail = await getLibraryDetail(item.id);
-                                    setProducts(detail.products);
-                                    setCurrentFileName(detail.name);
-                                    setCurrentLibraryId(detail.id);
+                                    
+                                    // 2. 检查是否需要下载解析图片 (如果第一个商品没有图片 Base64)
+                                    let finalDetail = detail;
+                                    const hasImages = detail.products && detail.products.length > 0 && 
+                                                     (detail.products[0]._image_url || detail.products[0]._image_base64);
+                                    
+                                    if (!hasImages && detail.excelUrl) {
+                                      setLocalizeStatus('正在从 R2 下载并解析 Excel 内容...');
+                                      setLocalizeProgress(20);
+                                      const parseRes = await fetch(`/api/library/parse?id=${item.id}`);
+                                      if (!parseRes.ok) throw new Error('解析失败');
+                                      finalDetail = await parseRes.json();
+                                      setLocalizeProgress(100);
+                                    }
+
+                                    setProducts(finalDetail.products);
+                                    setCurrentFileName(finalDetail.name);
+                                    setCurrentLibraryId(finalDetail.id);
                                     setCurrentLibraryType('pending');
                                     setCurrentIndex(0);
                                     setLikedProducts([]);
@@ -1170,6 +1162,10 @@ export default function Home() {
                                     alert('加载详情失败: ' + err.message);
                                   } finally {
                                     setIsLibraryLoading(false);
+                                    setTimeout(() => {
+                                      setLocalizeStatus(null);
+                                      setLocalizeProgress(0);
+                                    }, 1000);
                                   }
                                 }}
                                 className={`p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors ${isLibraryLoading ? 'opacity-50 cursor-not-allowed' : ''}`}

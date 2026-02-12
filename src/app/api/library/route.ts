@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import crypto from 'crypto';
-import { initDb, getLibraries, saveLibrary, deleteLibrary, getLibraryById, updateLibraryName } from '@/lib/db';
+import { initDb, getLibraries, saveLibrary, deleteLibrary, getLibraryById, updateLibraryName, getLibrariesByMotherId } from '@/lib/db';
 import { uploadToBlob, deleteFromBlob, isR2Url } from '@/lib/blob-utils';
 import { FIELD_ALIASES } from '@/lib/excel';
 
@@ -175,7 +175,6 @@ export async function POST(req: NextRequest) {
     }));
 
     const products: any[] = [];
-    const uploadPromises: Promise<string>[] = [];
 
     // 填充数据并处理图片
     for (let i = 0; i < rows.length; i++) {
@@ -194,16 +193,12 @@ export async function POST(req: NextRequest) {
       });
       newRow.height = 100;
 
-      // 处理图片：上传到 R2 并嵌入新 Excel
-      const imgInfo = rowImageMap[i + 1]; // 原始表的行索引 (0-based, row 1 is 0)
+      // 处理图片：仅嵌入新 Excel，不再上传 R2 碎图片
+      const imgInfo = rowImageMap[i + 1];
       if (imgInfo) {
-        const imgPath = `images/${id}/${i}_0.png`;
-        const uploadPromise = uploadToBlob(imgPath, imgInfo.buffer, `image/${imgInfo.ext}`);
-        uploadPromises.push(uploadPromise);
-
         // 嵌入图片到新表
         const imageId = cleanWorkbook.addImage({
-          buffer: imgInfo.buffer,
+          buffer: imgInfo.buffer as any,
           extension: imgInfo.ext as any,
         });
         cleanSheet.addImage(imageId, {
@@ -211,10 +206,6 @@ export async function POST(req: NextRequest) {
           ext: { width: 120, height: 120 },
           editAs: 'oneCell'
         });
-
-        // 在数据库 JSON 中记录 R2 URL (使用私有属性 _image_url)
-        // 这样在导出时不会作为一列出现，但在 UI 上可以显示
-        dataRow._image_url = `PENDING_URL_${i}`; 
       }
 
       products.push({
@@ -223,33 +214,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 等待所有图片上传完成，并替换占位符
-    const r2Urls = await Promise.all(uploadPromises);
-    products.forEach((p, idx) => {
-      if (p._image_url && p._image_url.startsWith('PENDING_URL_')) {
-        const urlIdx = parseInt(p._image_url.replace('PENDING_URL_', ''));
-        // 注意：这里由于是异步上传，顺序可能不对，需要更稳妥的映射。
-        // 简单起见，重新跑一遍上传逻辑或使用 Map。
-      }
-    });
-
-    // 修正：使用 Map 确保 URL 对应正确
-    const actualR2Urls = await Promise.all(
-      products.map(async (p, i) => {
-        const imgInfo = rowImageMap[i + 1];
-        if (imgInfo) {
-          const imgPath = `images/${id}/${i}_0.${imgInfo.ext}`;
-          return await uploadToBlob(imgPath, imgInfo.buffer, `image/${imgInfo.ext}`);
-        }
-        return null;
-      })
-    );
-    
-    products.forEach((p, i) => {
-      if (actualR2Urls[i]) p._image_url = actualR2Urls[i];
-    });
-
-    // 4. 上传纯净版母库 Excel 到 R2
+    // 4. 上传纯净版母库 Excel 到 R2 (此时 R2 只有这一个文件)
     const cleanBuffer = await cleanWorkbook.xlsx.writeBuffer();
     const excelUrl = await uploadToBlob(`libraries/${id}.xlsx`, Buffer.from(cleanBuffer as ArrayBuffer), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 
@@ -288,7 +253,24 @@ export async function DELETE(req: NextRequest) {
     const lib = await getLibraryById(id);
     if (!lib) return NextResponse.json({ error: 'Library not found' }, { status: 404 });
 
-    // 1. Delete the Excel file associated with this record
+    // 1. 如果删除的是母库 (pending)，先连带删除所有子库 (completed)
+    if (lib.type === 'pending') {
+      console.log(`[Cascade Delete] Detecting mother library deletion. Cleaning up children...`);
+      const children = await getLibrariesByMotherId(id);
+      console.log(`[Cascade Delete] Found ${children.length} child libraries to remove.`);
+      
+      for (const child of children) {
+        // 删除子库的 Excel
+        if (child.excel_url) {
+          console.log(`[Cascade Delete] Removing child Excel: ${child.excel_url}`);
+          await deleteFromBlob(child.excel_url);
+        }
+        // 删除子库数据库记录
+        await deleteLibrary(child.id);
+      }
+    }
+
+    // 2. Delete the Excel file associated with this record
     if (lib.excel_url) {
       console.log(`[Delete] Removing Excel file from R2: ${lib.excel_url}`);
       await deleteFromBlob(lib.excel_url);

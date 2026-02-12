@@ -73,3 +73,10 @@ export async function getLibraryById(id: string) {
   `;
   return rows[0];
 }
+
+export async function getLibrariesByMotherId(motherId: string) {
+  const { rows } = await sql<LibraryRow>`
+    SELECT * FROM libraries WHERE original_library_id = ${motherId}
+  `;
+  return rows;
+}
