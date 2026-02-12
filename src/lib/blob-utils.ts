@@ -1,43 +1,74 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
 
-const r2Client = new S3Client({
-  region: 'auto',
-  endpoint: process.env.R2_ENDPOINT,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
-  },
-});
+// 延迟初始化 S3 客户端，确保在调用时环境变量已加载
+let _r2Client: S3Client | null = null;
 
-const BUCKET_NAME = process.env.R2_BUCKET_NAME;
-const PUBLIC_URL = process.env.R2_PUBLIC_URL;
+function getR2Client() {
+  if (!_r2Client) {
+    const endpoint = process.env.R2_ENDPOINT;
+    const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+    const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+
+    if (!endpoint) {
+      console.error('[R2] Missing R2_ENDPOINT environment variable');
+    }
+
+    _r2Client = new S3Client({
+      region: 'auto',
+      endpoint: endpoint || undefined,
+      credentials: {
+        accessKeyId: accessKeyId || '',
+        secretAccessKey: secretAccessKey || '',
+      },
+      // R2 强烈建议设置 forcePathStyle 为 true
+      forcePathStyle: true,
+    });
+  }
+  return _r2Client;
+}
+
+const getBucketName = () => process.env.R2_BUCKET_NAME || '';
+const getPublicUrl = () => process.env.R2_PUBLIC_URL || '';
 
 /**
  * 判断 URL 是否属于 R2
  */
 export const isR2Url = (url: string) => {
-  if (!url || !PUBLIC_URL) return false;
+  const publicUrl = getPublicUrl();
+  if (!url || !publicUrl) return false;
   
   // 更加宽松的匹配逻辑：忽略协议(http/https)和末尾斜杠
   const normalize = (u: string) => u.replace(/^https?:\/\//, '').replace(/\/$/, '');
-  return normalize(url).startsWith(normalize(PUBLIC_URL));
+  return normalize(url).startsWith(normalize(publicUrl));
 };
 
 /**
  * Upload a file to Cloudflare R2
  */
 export async function uploadToBlob(path: string, buffer: Buffer, contentType?: string) {
+  const bucketName = getBucketName();
+  if (!bucketName) throw new Error('R2_BUCKET_NAME is not defined');
+
   const command = new PutObjectCommand({
-    Bucket: BUCKET_NAME,
+    Bucket: bucketName,
     Key: path,
     Body: buffer,
     ContentType: contentType,
   });
 
-  await r2Client.send(command);
-  
-  // 返回公共可访问的 URL
-  return `${PUBLIC_URL}/${path}`;
+  try {
+    const client = getR2Client();
+    await client.send(command);
+    
+    // 返回公共可访问的 URL
+    return `${getPublicUrl()}/${path}`;
+  } catch (error: any) {
+    console.error('[R2] Upload failed:', error);
+    if (error.message.includes('ENOTFOUND') && !process.env.R2_ENDPOINT) {
+      throw new Error('R2 存储配置错误：未找到 R2_ENDPOINT 环境变量，请检查 Vercel 项目设置。');
+    }
+    throw error;
+  }
 }
 
 /**
@@ -46,26 +77,23 @@ export async function uploadToBlob(path: string, buffer: Buffer, contentType?: s
 export async function deleteFromBlob(url: string) {
   if (!url) return;
   
-  // 如果是旧的 Vercel Blob 链接，直接忽略
   if (!isR2Url(url)) {
     console.log('[R2] Skipping delete for non-R2 URL:', url);
     return;
   }
 
   try {
-    // 使用 URL 对象更准确地提取路径作为 Key
     const urlObj = new URL(url);
-    // pathname 通常以 / 开头，S3 的 Key 不需要开头的 /
     const key = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
     
-    console.log(`[R2] Attempting to delete key: ${key}`);
-    
+    const bucketName = getBucketName();
     const command = new DeleteObjectCommand({
-      Bucket: BUCKET_NAME,
+      Bucket: bucketName,
       Key: key,
     });
 
-    await r2Client.send(command);
+    const client = getR2Client();
+    await client.send(command);
     console.log(`[R2] Successfully deleted: ${key}`);
   } catch (error) {
     console.error('[R2] Failed to delete:', url, error);
@@ -77,7 +105,6 @@ export async function deleteFromBlob(url: string) {
  */
 export async function copyBlob(sourceUrl: string, destinationPath: string) {
   try {
-    // 如果源是 Vercel Blob，无法直接在 R2 内部 Copy，必须报错让上层走回退逻辑
     if (!isR2Url(sourceUrl)) {
       throw new Error('Cannot copy from non-R2 source');
     }
@@ -85,17 +112,19 @@ export async function copyBlob(sourceUrl: string, destinationPath: string) {
     const urlObj = new URL(sourceUrl);
     const sourceKey = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
     
+    const bucketName = getBucketName();
     const command = new CopyObjectCommand({
-      Bucket: BUCKET_NAME,
-      CopySource: `${BUCKET_NAME}/${sourceKey}`,
+      Bucket: bucketName,
+      CopySource: `${bucketName}/${sourceKey}`,
       Key: destinationPath,
     });
 
-    await r2Client.send(command);
+    const client = getR2Client();
+    await client.send(command);
     
-    return `${PUBLIC_URL}/${destinationPath}`;
-  } catch (error) {
-    console.error('Failed to copy in R2:', sourceUrl, error);
+    return `${getPublicUrl()}/${destinationPath}`;
+  } catch (error: any) {
+    console.error('[R2] Copy failed:', error);
     throw error;
   }
 }

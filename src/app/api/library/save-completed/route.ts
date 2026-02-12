@@ -95,6 +95,16 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, id });
     } catch (error: any) {
         console.error('Save completed error:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        
+        // 如果是环境变量缺失导致的 DNS 错误，提供更明确的提示
+        let errorMessage = error.message;
+        if (errorMessage.includes('getaddrinfo ENOTFOUND s3.auto.amazonaws.com')) {
+            errorMessage = '服务器 R2 存储配置缺失 (R2_ENDPOINT)。请检查环境变量设置。';
+        }
+        
+        return NextResponse.json({ 
+            error: errorMessage,
+            details: error.stack
+        }, { status: 500 });
     }
 }
