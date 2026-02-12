@@ -576,18 +576,18 @@ export default function Home() {
 
       // 5. 提示完成
       if (saveToLib) {
-        setLocalizeStatus('✅ 已成功导入待选品库并保存到永久 R2！');
+        setLocalizeStatus(`✅ 已成功转换并导入：${file.name}`);
         // 如果当前正在待选品库视图，则刷新列表
         if (view === 'pending') {
           await fetchLibrary();
         }
       } else {
         // 如果只是预览不保存，则提示下载（此时由于逻辑变化，暂时先提示成功）
-        setLocalizeStatus('✅ 处理完成！数据已同步至云端。');
-        // 如果以后还需要本地下载，可以在此处单独 fetch(resultData.excelUrl) 并触发下载
+        setLocalizeStatus(`✅ 处理完成：${file.name}，数据已同步至云端。`);
       }
 
-      setTimeout(() => setLocalizeStatus(null), 5000);
+      // 移除自动隐藏逻辑，使其一直保持直到刷新或下次操作
+      // setTimeout(() => setLocalizeStatus(null), 5000);
     } catch (err: any) {
       console.error('处理过程被中断:', err);
       setError(err.message || '处理失败');
