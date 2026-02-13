@@ -15,8 +15,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
   const [isImageLoading, setIsImageLoading] = useState(true);
   const x = useMotionValue(0);
   const y = useMotionValue(0);
-  const rotate = useTransform(x, [-200, 200], [-10, 10]);
-  const opacity = useTransform(x, [-200, -150, 0, 150, 200], [0, 1, 1, 1, 0]);
+  const rotate = useTransform(x, [-200, 200], [-25, 25]);
+  const scale = useTransform(x, [-150, 0, 150], [1.05, 1, 1.05]);
+  const opacity = useTransform(x, [-250, -200, 0, 200, 250], [0, 1, 1, 1, 0]);
 
   // 提取图片 URL 的辅助函数
   const getImageUrl = (product: any) => {
@@ -83,7 +84,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
 
   return (
     <motion.div
-      style={{ x, y, rotate, opacity }}
+      style={{ x, y, rotate, opacity, scale }}
       drag
       dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
       onDragEnd={handleDragEnd}
@@ -118,18 +119,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
         </div>
         {/* 滑动状态叠加层 */}
         <motion.div 
-          style={{ opacity: useTransform(x, [50, 150], [0, 1]) }}
-          className="absolute inset-0 bg-green-500/10 flex items-center justify-center"
+          style={{ opacity: useTransform(x, [40, 120], [0, 1]) }}
+          className="absolute inset-0 bg-green-500/20 flex items-center justify-center"
         >
-          <div className="bg-green-500 text-white p-4 rounded-full shadow-2xl scale-110 md:scale-125">
+          <div className="bg-green-500 text-white p-4 rounded-full shadow-2xl scale-125 md:scale-150 ring-8 ring-green-500/20">
             <Heart size={32} fill="currentColor" />
           </div>
         </motion.div>
         <motion.div 
-          style={{ opacity: useTransform(x, [-150, -50], [1, 0]) }}
-          className="absolute inset-0 bg-red-500/10 flex items-center justify-center"
+          style={{ opacity: useTransform(x, [-120, -40], [1, 0]) }}
+          className="absolute inset-0 bg-red-500/20 flex items-center justify-center"
         >
-          <div className="bg-red-500 text-white p-4 rounded-full shadow-2xl scale-110 md:scale-125">
+          <div className="bg-red-500 text-white p-4 rounded-full shadow-2xl scale-125 md:scale-150 ring-8 ring-red-500/20">
             <X size={32} />
           </div>
         </motion.div>

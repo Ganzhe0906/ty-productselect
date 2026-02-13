@@ -830,7 +830,7 @@ export default function Home() {
   return (
     <main 
       ref={mainRef}
-      className="h-screen flex flex-col items-center justify-start p-2 md:p-4 bg-[#F2F2F7] overflow-hidden"
+      className="h-[100dvh] w-full flex flex-col items-center justify-start p-2 md:p-4 bg-[#F2F2F7] overflow-hidden fixed inset-0"
     >
       <AnimatePresence mode="wait">
         {!currentUser ? (

@@ -13,11 +13,14 @@
   --ios-orange: #FF9500;
 }
 
+html,
 body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
   background-color: var(--ios-bg);
   color: var(--ios-label);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
-  overflow-x: hidden;
 }
 
 @layer components {
