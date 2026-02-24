@@ -1,0 +1,15 @@
+- [x] `exceljs` 依赖已成功安装。
+- [x] `lib/middleware-mode3.ts` 文件已创建，并且 `parseMode3Middleware` 函数已正确实现。
+  - [x] 图片提取逻辑和坐标映射功能正常。**已严格测试 `exceljs` 的行号偏移量，确保图片与数据行绝对对应，并通过日志进行了校验。**
+  - [x] 并发控制（例如，每次最多并行上传 5 张图片）已实现，且图片上传到 Cloudflare R2 功能正常，并能通过回调函数向 UI 的 `localizeStatus` 反馈进度。
+  - [x] 清洗后的 JSON 数据已成功打包为模式 1 兼容的 Excel `File` 对象。
+- [x] `src/app/page.tsx` 文件已更新，模式 3 的上传逻辑已正确集成 `parseMode3Middleware`。
+  - [x] `parseMode3Middleware` 已正确导入。
+  - [x] `handleMode3Upload` 函数已创建并能正确处理文件上传。
+  - [x] 模式 3 的 `input` 元素已绑定 `handleMode3Upload`。
+- [x] `/api/upload-image/route.ts` 接口已实现（如果需要），**并已正确处理 `FormData` 的解析，将 `file.arrayBuffer()` 转换为 `Node.js` 的 `Buffer` 后再调用 `R2` 上传工具。**
+- [x] 后端 `api/localize/finalize/route.ts` 文件已更新，能够正确识别自有 R2 域名并跳过图片抓取。
+  - [x] R2 域名识别逻辑正确。
+  - [x] 图片抓取跳过逻辑正确。
+- [ ] 模式 3 的端到端流程（文件上传 -> 中间件 -> `processLocalize` -> 后端 finalize）功能正常。
+- [ ] `processLocalize` 核心主线代码未被修改.

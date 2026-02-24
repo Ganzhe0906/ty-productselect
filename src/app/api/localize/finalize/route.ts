@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import ExcelJS from 'exceljs';
 import axios from 'axios';
 import crypto from 'crypto';
-import { uploadToBlob } from '@/lib/blob-utils';
+import { uploadToBlob, isR2Url } from '@/lib/blob-utils';
 import { initDb, saveLibrary } from '@/lib/db';
 
 async function downloadImageBuffer(url: string): Promise<Buffer> {
@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
             };
 
             try {
-                const { data, headers, finalColumns, srcField, fileName, saveToLibrary } = await req.json();
+                const { data, headers, finalColumns, srcField, fileName, saveToLibrary, skipImageUpload } = await req.json();
 
                 if (!data || !Array.isArray(data)) {
                     sendError('No data provided');
@@ -74,28 +74,47 @@ export async function POST(req: NextRequest) {
                     const row = worksheet.addRow(cleanRowData);
                     row.height = 100;
 
-                    if (originalUrl && originalUrl.startsWith('http')) {
-                        try {
-                            const imageBuffer = await downloadImageBuffer(originalUrl);
-                            const extension = originalUrl.toLowerCase().includes('.png') ? 'png' : 'jpeg';
-                            const imageId = workbook.addImage({
-                                buffer: imageBuffer as any,
-                                extension: extension as 'jpeg' | 'png',
-                            });
+                    if (skipImageUpload) {
+                        console.log(`[显式跳过] 'skipImageUpload' is true, skipping image embedding for ${originalUrl}`);
+                        // For Mode 3, the image URL is already an R2 link and is in '主图src'.
+                        // We do not embed it in the excel, just keep the link in the cell.
+                    } else {
+                        let imageBuffer;
+                        let imageExtension;
+                        if (originalUrl && originalUrl.startsWith('http')) {
+                            if (isR2Url(originalUrl)) {
+                                console.log(`[模式1-R2链接] 检测到已有 R2 链接: ${originalUrl}`);
+                                imageBuffer = await downloadImageBuffer(originalUrl);
+                                imageExtension = originalUrl.toLowerCase().includes('.png') ? 'png' : 'jpeg';
+                            } else {
+                                try {
+                                    console.log(`[模式1-抓取] 正在抓取图片: ${originalUrl}`);
+                                    imageBuffer = await downloadImageBuffer(originalUrl);
+                                    imageExtension = originalUrl.toLowerCase().includes('.png') ? 'png' : 'jpeg';
+                                } catch (error: any) {
+                                    console.error(`图片下载失败: ${originalUrl}`, error.message);
+                                    imageBuffer = undefined;
+                                }
+                            }
 
-                            const colIndex = finalColumns.findIndex((c: any) => c.key === srcField || c.header === '主图');
-                            const actualCol = colIndex !== -1 ? colIndex : 0;
+                            if (imageBuffer) {
+                                const imageId = workbook.addImage({
+                                    buffer: imageBuffer as any,
+                                    extension: imageExtension as 'jpeg' | 'png',
+                                });
 
-                            worksheet.addImage(imageId, {
-                                tl: { col: actualCol, row: rowIndex - 1 },
-                                ext: { width: 120, height: 120 },
-                                editAs: 'oneCell'
-                            });
-                            
-                            // 单元格文字置空，只留图片
-                            row.getCell(actualCol + 1).value = ' ';
-                        } catch (error: any) {
-                            console.error(`图片下载失败: ${originalUrl}`, error.message);
+                                const colIndex = finalColumns.findIndex((c: any) => c.key === srcField || c.header === '主图');
+                                const actualCol = colIndex !== -1 ? colIndex : 0;
+
+                                worksheet.addImage(imageId, {
+                                    tl: { col: actualCol, row: rowIndex - 1 },
+                                    ext: { width: 120, height: 120 },
+                                    editAs: 'oneCell'
+                                });
+
+                                // 单元格文字置空，只留图片
+                                row.getCell(actualCol + 1).value = ' ';
+                            }
                         }
                     }
                     processedProducts.push(productData);

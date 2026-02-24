@@ -7,6 +7,7 @@ import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check
 import { AnimatePresence, motion } from 'framer-motion';
 import { saveToPending, saveToCompleted, getPendingLibrary, getCompletedLibrary, deletePendingItem, deleteCompletedItem, LibraryItem, getLibraryDetail, renameLibrary } from '@/lib/storage';
 import * as XLSX from 'xlsx';
+import { parseMode3Middleware } from '@/lib/middleware-mode3';
 
 // 静态账户配置
 const USERS = {
@@ -41,6 +42,17 @@ interface HistoryRecord {
   currentLibraryType?: 'pending' | 'completed' | null;
 }
 
+interface ConfirmData {
+  price: string;
+  column: string;
+  row: number;
+  file: File;
+  data: any[]; // [新增] 根据用户提供的接口定义添加
+  isSaveToLibrary: boolean;
+  isValid: boolean;
+  skipImageUpload?: boolean; // [新增] 透传安全开关
+}
+
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -69,14 +81,7 @@ export default function Home() {
   const [isImportingToLibrary, setIsImportingToLibrary] = useState(false);
   const [showModeModal, setShowModeModal] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [confirmData, setConfirmData] = useState<{
-    price: string;
-    column: string;
-    row: number;
-    file: File;
-    isSaveToLibrary: boolean;
-    isValid: boolean;
-  } | null>(null);
+  const [confirmData, setConfirmData] = useState<ConfirmData | null>(null);
   const [confirmCountdown, setConfirmCountdown] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentFileName, setCurrentFileName] = useState<string>('');
@@ -118,7 +123,7 @@ export default function Home() {
           // 自动触发确认逻辑
           setShowConfirmModal(false);
           if (confirmData) {
-            processLocalize(confirmData.file, confirmData.isSaveToLibrary, true);
+            processLocalize(confirmData.file, confirmData.isSaveToLibrary, true, confirmData.skipImageUpload);
           }
           return 0;
         }
@@ -346,7 +351,12 @@ export default function Home() {
     }
   };
 
-  const processLocalize = async (file: File, saveToLib: boolean = false, skipConfirm: boolean = false) => {
+  const processLocalize = async (
+    file: File, 
+    saveToLib: boolean = false, 
+    skipConfirm: boolean = false,
+    skipImageUpload: boolean = false // [新增]
+  ) => {
     console.log('开始本地化处理 (前端调度模式):', file.name, 'saveToLibrary:', saveToLib, 'skipConfirm:', skipConfirm);
     
     // 如果没有跳过确认，先进行预览检测
@@ -389,8 +399,10 @@ export default function Home() {
           column: foundCol,
           row: 2, // 第一行是表头，所以第一个数据行是第2行
           file,
+          data: rawData, // [新增] 传入完整数据，因为ConfirmModal可能需要更多信息
           isSaveToLibrary: saveToLib,
-          isValid
+          isValid,
+          skipImageUpload // [新增] 把当前状态存进弹窗
         });
         
         if (isValid) {
@@ -532,7 +544,8 @@ export default function Home() {
           finalColumns, 
           srcField,
           fileName: file.name,
-          saveToLibrary: saveToLib
+          saveToLibrary: saveToLib,
+          skipImageUpload // [新增] 透传给后端
         }),
       });
 
@@ -605,38 +618,63 @@ export default function Home() {
   };
 
   const handleImportToLibrary = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        
+        setIsLoading(true);
+        setError(null);
+        setLocalizeStatus('正在导入并提取图片...');
+        
+        try {
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('type', 'pending');
+
+          const response = await fetch('/api/library', {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || '导入失败');
+          }
+
+          setLocalizeStatus('✅ 已成功导入待选品库并保存到本地！');
+          setTimeout(() => setLocalizeStatus(null), 3000);
+        } catch (err) {
+          console.error('导入错误:', err);
+          setError(err instanceof Error ? err.message : '导入失败');
+        } finally {
+          setIsLoading(false);
+          e.target.value = '';
+        }
+      };
+
+  // 修改模式 3 的上传处理函数 
+  const handleMode3Upload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
-      
-      setIsLoading(true);
-      setError(null);
-      setLocalizeStatus('正在导入并提取图片...');
-      
+  
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('type', 'pending');
-
-        const response = await fetch('/api/library', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const data = await response.json();
-          throw new Error(data.error || '导入失败');
-        }
-
-        setLocalizeStatus('✅ 已成功导入待选品库并保存到本地！');
-        setTimeout(() => setLocalizeStatus(null), 3000);
-      } catch (err) {
-        console.error('导入错误:', err);
-        setError(err instanceof Error ? err.message : '导入失败');
+          setIsLoading(true);
+          setLocalizeStatus('正在深度提取表格图片与重构数据结构...');
+          
+          // 1. 通过中间件进行移花接木 
+          const normalizedFile = await parseMode3Middleware(file, (message) => {
+              setLocalizeStatus(message);
+          });
+          
+          // 2. 将伪装好的新文件送入原有核心引擎 (跳过确认弹窗，直接保存库) 
+          await processLocalize(normalizedFile, true, false, true);
+          
+      } catch (err: any) {
+          setError('模式 3 处理失败: ' + err.message);
       } finally {
-        setIsLoading(false);
-        e.target.value = '';
+          setIsLoading(false);
+          e.target.value = '';
       }
-    };
+  };
 
   const handleSwipe = useCallback((direction: 'left' | 'right' | 'up') => {
     if (direction === 'up') {
@@ -1747,14 +1785,23 @@ export default function Home() {
                 )}
               </motion.div>
             )}
-          </AnimatePresence>
-          {/* Hidden Input outside conditional blocks to avoid unmounting during async ops */}
+          </AnimatePresence> 
+          {/* Hidden Input outside conditional blocks to avoid unmounting during async ops */} 
           <input 
-            id="localize-upload"
+            id="localize-upload" 
             type="file" 
             accept=".xlsx, .xls" 
             onChange={handleLocalizeUpload} 
             className="hidden" 
+          /> 
+          
+          {/* 👇 把模式 3 的 Input 搬到这里 👇 */} 
+          <input 
+              id="mode3-upload" 
+              type="file" 
+              accept=".xlsx, .xls" 
+              onChange={handleMode3Upload} 
+              className="hidden" 
           />
         </div>
 
@@ -1927,17 +1974,25 @@ export default function Home() {
                   </button>
 
                   <button
-                    disabled
-                    className="flex items-center gap-4 p-4 bg-gray-50 rounded-2xl text-left border border-gray-100 opacity-60 cursor-not-allowed"
+                    onClick={() => {
+                      setShowModeModal(false);
+                      setTimeout(() => {
+                        document.getElementById('mode3-upload')?.click();
+                      }, 100);
+                    }}
+                    className="flex items-center gap-4 p-4 bg-blue-50 hover:bg-blue-100 rounded-2xl transition-all group text-left border border-blue-100"
                   >
-                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-gray-400 shadow-sm">
+                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-[#007AFF] shadow-sm group-hover:scale-110 transition-transform">
                       <Layout size={20} />
                     </div>
                     <div>
-                      <div className="font-bold text-gray-500 text-sm">模式 3：卖家精灵 (Amazon)</div>
-                      <div className="text-[10px] text-gray-400 font-bold">暂不可用</div>
+                      <div className="font-bold text-black text-sm">模式 3：卖家精灵 (Amazon)</div>
+                      <div className="text-[10px] text-[#007AFF] font-bold">支持内嵌图片与非标准表头</div>
                     </div>
                   </button>
+
+
+
 
                   <button
                     disabled
@@ -2031,7 +2086,7 @@ export default function Home() {
                     onClick={() => {
                       setShowConfirmModal(false);
                       if (confirmData) {
-                        processLocalize(confirmData.file, confirmData.isSaveToLibrary, true);
+                        processLocalize(confirmData.file, confirmData.isSaveToLibrary, true, confirmData.skipImageUpload);
                       }
                       setConfirmCountdown(0);
                     }}
