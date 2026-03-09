@@ -19,10 +19,17 @@ export const saveToPending = async (name: string, products: Product[]) => {
 };
 
 export const saveToCompleted = async (name: string, products: Product[], originalLibraryId?: string, createdBy?: string) => {
+  // 过滤掉巨大的 Base64 图片数据，避免 413 FUNCTION_PAYLOAD_TOO_LARGE
+  // 保留 _index 供导出时从母版 Excel 溯源图片
+  const lightweightProducts = products.map((p) => {
+    const { _image_url, _image_base64, ...rest } = p as Record<string, unknown>;
+    return rest;
+  });
+
   const response = await fetch('/api/library/save-completed', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, products, originalLibraryId, createdBy }),
+    body: JSON.stringify({ name, products: lightweightProducts, originalLibraryId, createdBy }),
   });
   
   if (!response.ok) {
