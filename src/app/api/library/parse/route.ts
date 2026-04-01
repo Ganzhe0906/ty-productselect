@@ -5,7 +5,7 @@ import { getLibraryById, initDb } from '@/lib/db';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const id = searchParams.get('id');
+    const id = req.nextUrl.searchParams.get('id');
 
   if (!id) return NextResponse.json({ error: 'Missing ID' }, { status: 400 });
 
@@ -39,7 +39,8 @@ export async function GET(req: NextRequest) {
         const row = Math.floor(img.range.tl.nativeRow);
         const base64 = `data:image/${imgData.extension};base64,${Buffer.from(imgData.buffer as any).toString('base64')}`;
         
-        // 存入行号映射 (ExcelJS 的 row 是 0-based)
+        // ExcelJS 的 row 索引: nativeRow 通常是从 0 开始（0代表第一行）
+        // 如果 nativeRow === 0 是表头，那么 nativeRow === 1 是第一条商品数据
         if (!rowImageMap[row]) {
           rowImageMap[row] = base64;
         }
@@ -48,14 +49,20 @@ export async function GET(req: NextRequest) {
       }
     });
 
+    console.log('[Parse] rowImageMap keys (nativeRows with images):', Object.keys(rowImageMap));
+
     // 3. 将图片 Base64 注入到产品数据中
     const productsWithImages = (lib.products as any[]).map((p, i) => {
-      // 这里的 i 对应 rows 里的索引，母版 Excel 的第 i+2 行对应产品的第 i 个
-      // rowImageMap 的 key 是 0-based row index，所以第 2 行是 1
+      // 这里的 i = 0 对应第一条商品
+      // 如果 Excel 表头在 nativeRow 0，第一条商品在 nativeRow 1
       const rowIndex = i + 1; 
+      
+      const img = rowImageMap[rowIndex] || null;
+      console.log(`[Parse] item i=${i} => rowIndex=${rowIndex} => img? ${!!img}`);
+      
       return {
         ...p,
-        _image_url: rowImageMap[rowIndex] || null
+        _image_url: img
       };
     });
 

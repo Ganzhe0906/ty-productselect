@@ -3,7 +3,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Product, exportToExcel } from '@/lib/excel';
 import { ProductCard } from '@/components/ProductCard';
-import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check, X, Loader2, Archive, Library, Trash2, Edit2, Users, Layers, Zap, Sparkles, Layout } from 'lucide-react';
+import { Upload, Download, RefreshCw, CheckCircle2, AlertCircle, Terminal, Check, X, Loader2, Archive, Library, Trash2, Edit2, Users, Layers, Zap, Sparkles, Layout, Eye } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { saveToPending, saveToCompleted, getPendingLibrary, getCompletedLibrary, deletePendingItem, deleteCompletedItem, LibraryItem, getLibraryDetail, renameLibrary } from '@/lib/storage';
 import * as XLSX from 'xlsx';
@@ -74,7 +74,7 @@ export default function Home() {
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
-  const [view, setView] = useState<'home' | 'pending' | 'completed' | 'combined'>('home');
+  const [view, setView] = useState<'home' | 'pending' | 'completed' | 'combined' | 'browse'>('home');
   const [libraryItems, setLibraryItems] = useState<any[]>([]);
   const [isLibraryLoading, setIsLibraryLoading] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
@@ -88,6 +88,9 @@ export default function Home() {
   const [currentLibraryId, setCurrentLibraryId] = useState<string | null>(null);
   const [currentLibraryType, setCurrentLibraryType] = useState<'pending' | 'completed' | null>(null);
   const mainRef = useRef<HTMLElement>(null);
+  const [browseProducts, setBrowseProducts] = useState<Product[]>([]);
+  const [browseTitle, setBrowseTitle] = useState<string>('');
+  const [browseCount, setBrowseCount] = useState<number>(0);
 
   // Editing state for renaming
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -192,6 +195,119 @@ export default function Home() {
     const urlMatch = url.match(/(https?:\/\/[^\s"'<>]+)/i);
     if (urlMatch && urlMatch[0]) return urlMatch[0];
     return url.trim();
+  };
+
+  const normalizeKey = (x: string) => x.toLowerCase().replace(/\s+/g, '').replace(/[_-]/g, '');
+
+  const pickFieldByAliases = (keys: string[], aliases: string[]): string => {
+    // 1) exact match first
+    for (const a of aliases) {
+      const exact = keys.find(k => k === a);
+      if (exact) return exact;
+    }
+    // 2) normalized exact match
+    const keyNormMap = new Map(keys.map(k => [normalizeKey(k), k]));
+    for (const a of aliases) {
+      const hit = keyNormMap.get(normalizeKey(a));
+      if (hit) return hit;
+    }
+    // 3) startsWith match
+    for (const a of aliases) {
+      const na = normalizeKey(a);
+      for (const k of keys) {
+        if (normalizeKey(k).startsWith(na)) return k;
+      }
+    }
+    // 4) contains match as last fallback
+    for (const a of aliases) {
+      const na = normalizeKey(a);
+      for (const k of keys) {
+        if (normalizeKey(k).includes(na)) return k;
+      }
+    }
+    // 5) Special fallback for shipping: checking if column name contains specific terms
+    if (aliases.includes('运费')) {
+      for (const k of keys) {
+        const lower = k.toLowerCase();
+        if (lower.includes('shipping') || lower.includes('freight') || lower.includes('delivery') || lower.includes('运费') || lower.includes('邮费')) {
+          return k;
+        }
+      }
+    }
+    return '';
+  };
+
+  /** 与 ProductCard 一致：优先 R2/解析得到的 _image_url（常为 data: 内嵌图），再降级到单元格链接 */
+  const getBrowseImageSrc = (p: Product & Record<string, unknown>): string => {
+    const direct = p._image_url || p._image_base64;
+    if (typeof direct === 'string' && direct.trim()) {
+      const s = direct.trim();
+      if (s.startsWith('data:') || s.startsWith('http://') || s.startsWith('https://') || s.startsWith('blob:')) {
+        return s;
+      }
+    }
+    const cell = p['主图src'] ?? p['主图'] ?? p['图片'] ?? p.src;
+    if (cell !== undefined && cell !== null && cell !== '') return extractUrl(cell);
+    return '';
+  };
+
+  /** 从母版 Excel 解析内嵌图并合并到当前列表（优先按 _index 精准匹配，避免顺序错图） */
+  const mergeParsedImagesIntoProducts = (products: Product[], parsedRows: any[]): Product[] => {
+    // 1) 主路径：严格按 _index 映射（将 number/string 统一为字符串）
+    const imageByIndex = new Map<string, string>();
+    parsedRows.forEach((row: any) => {
+      const idx = row?._index;
+      const img = row?._image_url || row?._image_base64;
+      if (idx !== undefined && idx !== null && String(idx).trim() !== '' && typeof img === 'string' && img.trim()) {
+        imageByIndex.set(String(idx).trim(), img);
+      }
+    });
+
+    // 2) 仅在“商品本身没有 _index”时，才允许按标题兜底，防止把有索引商品错配成 1/2/3 顺序图
+    const byCnTitle = new Map(
+      parsedRows
+        .map((x: any) => [String(x?.['中文商品名'] || '').trim(), x?._image_url || x?._image_base64] as const)
+        .filter(([k, v]) => k !== '' && typeof v === 'string' && v.trim() !== '')
+    );
+    const byEnTitle = new Map(
+      parsedRows
+        .map((x: any) => [String(x?.['商品标题'] || x?.['商品名'] || x?.['title'] || '').trim(), x?._image_url || x?._image_base64] as const)
+        .filter(([k, v]) => k !== '' && typeof v === 'string' && v.trim() !== '')
+    );
+
+    return products.map((p: any) => {
+      const idx = p?._index;
+      const idxKey = idx !== undefined && idx !== null ? String(idx).trim() : '';
+      let img: string | undefined;
+
+      if (idxKey) {
+        img = imageByIndex.get(idxKey);
+      } else {
+        const cnTitle = String(p?.['中文商品名'] || '').trim();
+        const enTitle = String(p?.['商品标题'] || p?.['商品名'] || p?.['title'] || '').trim();
+        if (cnTitle) img = byCnTitle.get(cnTitle);
+        if (!img && enTitle) img = byEnTitle.get(enTitle);
+      }
+
+      if (!img) return p;
+      return { ...p, _image_url: img };
+    });
+  };
+
+  const enrichBrowseProductsWithParse = async (libraryId: string, products: Product[]): Promise<Product[]> => {
+    if (!products.length || !libraryId) return products;
+    const needsParse = products.some(
+      (p: any) => !(p._image_url || p._image_base64)
+    );
+    if (!needsParse) return products;
+    try {
+      const parseRes = await fetch(`/api/library/parse?id=${libraryId}`);
+      if (!parseRes.ok) return products;
+      const parsed = await parseRes.json();
+      return mergeParsedImagesIntoProducts(products, parsed.products || []);
+    } catch {
+      return products;
+    }
   };
 
   const handleRename = async (id: string, newName: string) => {
@@ -934,7 +1050,7 @@ export default function Home() {
             className="w-full max-w-6xl flex flex-col py-2 h-full"
           >
             {/* iOS Style Header - More Compact */}
-            <div className="mb-3 md:mb-4 flex justify-between items-center px-2 md:px-4">
+            <div className={`mb-3 md:mb-4 flex justify-between items-center px-2 md:px-4 ${view === 'browse' ? 'opacity-0 pointer-events-none' : ''}`}>
               <div className="flex items-baseline gap-2">
                 <h1 className="text-xl md:text-2xl font-black text-black tracking-tight">
                   滑动式<span className="text-[#007AFF]">选品平台</span>
@@ -973,10 +1089,10 @@ export default function Home() {
             </div>
 
             {/* Main Content Area - Expanded */}
-            <div className="flex-1 relative mb-2 overflow-hidden">
+            <div className={`flex-1 relative mb-2 overflow-hidden ${view === 'browse' ? 'mt-[-48px] md:mt-[-56px] z-[60]' : ''}`}>
               <AnimatePresence>
             {/* Library View */}
-            {view !== 'home' && (
+            {view !== 'home' && view !== 'browse' && (
               <motion.div
                 key="library"
                 initial={{ opacity: 0, x: 20 }}
@@ -1214,9 +1330,47 @@ export default function Home() {
                             )}
                             
                             {view === 'combined' ? (
-                              <button
-                                type="button"
-                                disabled={!item.isBothDone || isLibraryLoading}
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={!item.isBothDone || isLibraryLoading}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    setIsLibraryLoading(true);
+                                    setLocalizeStatus('正在加载双人交集（同导出逻辑）...');
+                                    try {
+                                      const res = await fetch('/api/library/view', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ mode: 'combined', originalLibraryId: item.id })
+                                      });
+                                      if (!res.ok) throw new Error('获取交集详情失败');
+                                      const data = await res.json();
+                                      if (data.error) throw new Error(data.error);
+                                      const products = data.products || [];
+                                      setBrowseProducts(products);
+                                      setBrowseTitle(`${item.name} (双人交集)`);
+                                      setBrowseCount(products.length);
+                                      setView('browse');
+                                    } catch (err: any) {
+                                      alert('浏览失败: ' + err.message);
+                                    } finally {
+                                      setIsLibraryLoading(false);
+                                      setTimeout(() => setLocalizeStatus(null), 1000);
+                                    }
+                                  }}
+                                  className={`p-2 rounded-xl transition-all flex items-center justify-center ${
+                                    item.isBothDone && !isLibraryLoading
+                                      ? 'bg-blue-100 text-[#007AFF] hover:bg-blue-200 shadow-sm active:scale-95' 
+                                      : 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
+                                  }`}
+                                  title={item.isBothDone ? '浏览交集结果' : '需双人均完成后才可浏览'}
+                                >
+                                  <Eye size={18} />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!item.isBothDone || isLibraryLoading}
                                 onClick={async (e) => {
                                   e.stopPropagation();
                                   setIsLibraryLoading(true);
@@ -1255,10 +1409,46 @@ export default function Home() {
                                 title={item.isBothDone ? '导出交集 Excel' : '需双人均完成后才可导出'}
                               >
                                 <Download size={18} />
-                                <span className="text-xs font-bold">{item.isBothDone ? '导出交集' : '待完成'}</span>
-                              </button>
+                                  <span className="text-xs font-bold">{item.isBothDone ? '导出交集' : '待完成'}</span>
+                                </button>
+                              </>
                             ) : (
                               <>
+                                {view === 'completed' && (
+                                  <button
+                                    type="button"
+                                    disabled={isLibraryLoading}
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      setIsLibraryLoading(true);
+                                      setLocalizeStatus('正在加载查看数据（同导出逻辑）...');
+                                      try {
+                                        const res = await fetch('/api/library/view', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ mode: 'completed', libraryId: item.id })
+                                        });
+                                        if (!res.ok) throw new Error('加载详情失败');
+                                        const data = await res.json();
+                                        if (data.error) throw new Error(data.error);
+                                        const products = data.products || [];
+                                        setBrowseProducts(products);
+                                        setBrowseTitle(item.name);
+                                        setBrowseCount(products.length);
+                                        setView('browse');
+                                      } catch (err: any) {
+                                        alert('加载详情失败: ' + err.message);
+                                      } finally {
+                                        setIsLibraryLoading(false);
+                                        setTimeout(() => setLocalizeStatus(null), 1000);
+                                      }
+                                    }}
+                                    className={`p-2 bg-blue-100 text-[#007AFF] rounded-xl hover:bg-blue-200 shadow-sm transition-colors active:scale-95 ${isLibraryLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                    title="浏览结果"
+                                  >
+                                    <Eye size={18} />
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   disabled={isLibraryLoading}
@@ -1322,6 +1512,190 @@ export default function Home() {
                         <Loader2 size={32} className="text-[#007AFF] animate-spin" />
                         <p className="text-xs font-bold text-black uppercase tracking-wider">正在同步中...</p>
                       </div>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+
+            {/* Browse View (Readonly Grid) */}
+            {view === 'browse' && (
+              <motion.div
+                key="browse"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 20 }}
+                className="absolute inset-x-0 inset-y-0 bg-[#F2F2F7] z-[60] flex flex-col p-2 md:p-3 overflow-hidden rounded-t-[1.5rem]"
+              >
+                <div className="flex items-center justify-between mb-3 bg-white px-4 py-2 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-gray-100 shrink-0">
+                  <button 
+                    onClick={() => {
+                      setView(browseTitle.includes('双人交集') ? 'combined' : 'completed');
+                      setBrowseProducts([]);
+                    }}
+                    className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors flex items-center gap-1.5 font-bold text-gray-600 text-sm"
+                  >
+                    <X size={18} /> <span className="hidden md:inline">返回</span>
+                  </button>
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-sm md:text-base font-bold text-black truncate max-w-[200px] md:max-w-md">
+                      {browseTitle}
+                    </h2>
+                    <div className="text-[10px] text-[#007AFF] font-bold bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">
+                      共 {browseCount} 件
+                    </div>
+                  </div>
+                  <div className="w-16" /> {/* Spacer */}
+                </div>
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar pb-6 pr-1 md:pr-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-4 px-1 pb-10">
+                    {browseProducts.map((p, idx) => {
+                      const keys = Object.keys(p);
+                      // 主图：与 ProductCard 一致：_image_url（parse 注入的 data: 或 R2）> _image_base64 > 单元格链接
+                      const imageUrl = getBrowseImageSrc(p as Product & Record<string, unknown>);
+                      
+                      // 2. 获取所需字段
+                      // 中文标题优先，其次是英文标题
+                      const cnTitleField = pickFieldByAliases(keys, ['中文商品名']);
+                      const enTitleField = pickFieldByAliases(keys, ['商品标题', '商品名', 'title', 'name']);
+                      const cnTitle = cnTitleField ? p[cnTitleField] : '';
+                      const enTitle = enTitleField ? p[enTitleField] : '未知商品';
+                      
+                      // 场景用途（如果有）
+                      const scenarioField = pickFieldByAliases(keys, ['场景用途']);
+                      const scenario = scenarioField ? p[scenarioField] : '';
+
+                      // 价格
+                      const priceField = pickFieldByAliases(keys, ['价格', '售价', 'price', 'selling_price', '金额']);
+                      const rawPrice = priceField ? String(p[priceField]).trim() : '';
+                      const price = rawPrice ? rawPrice.replace(/[^0-9.$\s€£¥\-~]/g, '') : '-';
+                      
+                      // 邮费
+                      // 运费（增加模糊与精准）
+                      const shippingField = pickFieldByAliases(keys, ['运费/usd(到美国)', '运费(到美国)', '运费/usd', '邮费', '运费', 'shipping_fee', 'shipping', 'delivery_fee', 'delivery']);
+                      let shipping = shippingField ? String(p[shippingField]).trim() : '-';
+                      if (shipping === '0' || shipping === '0.00' || shipping.toLowerCase() === 'free' || shipping === '免运费') shipping = '包邮';
+                      console.log('[DEBUG] 运费推导:', 'p=', p, 'keys=', keys, 'shippingField=', shippingField, '最终值=', shipping);
+
+                      // 评级
+                      const ratingField = pickFieldByAliases(keys, ['评分', '星级', 'rating', 'star']);
+                      const rating = ratingField ? p[ratingField] : '-';
+
+                      // 近7天销量
+                      const sales7dField = pickFieldByAliases(keys, ['近7天销量', '7天销量', '周销量', '7_days_sales', '7d_sales']);
+                      const sales7d = sales7dField ? p[sales7dField] : '-';
+
+                      // 总销量
+                      const totalSalesField = pickFieldByAliases(keys, ['总销量', '累计销量', 'total_sales', 'total sold']) 
+                        || keys.find(k => normalizeKey(k).includes('销量') && !normalizeKey(k).includes('7天') && !normalizeKey(k).includes('近7天'))
+                        || '';
+                      const totalSales = totalSalesField ? p[totalSalesField] : '-';
+
+                      // 达人数量
+                      const creatorField = pickFieldByAliases(keys, ['达人数', '带货达人数', '带货达人', '推广达人数', '推广达人', '带货人数', '达人']);
+                      const creators = creatorField ? String(p[creatorField]).trim() : '-';
+
+                      // 上架日期
+                      const dateField = pickFieldByAliases(keys, ['上架时间', '上架日期', '创建时间', '发布时间', 'date', 'created_at']);
+                      const date = dateField ? p[dateField] : '-';
+
+                      return (
+                        <div key={p._index || idx} className="bg-white rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200 flex flex-col border border-gray-100/80 group">
+                          {/* Image Section - Fixed aspect ratio 1:1, slightly smaller padding internally if needed */}
+                          <div className="w-full pt-[85%] relative bg-[#F9F9FB] overflow-hidden shrink-0">
+                            {imageUrl ? (
+                              <img 
+                                src={imageUrl} 
+                                alt="Product" 
+                                className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ease-out"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 gap-1.5">
+                                <AlertCircle size={20} className="opacity-20" />
+                                <span className="text-[10px] font-medium">暂无图片</span>
+                              </div>
+                            )}
+                            {/* Rank Badge */}
+                            <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-md text-white text-[9px] font-bold px-2 py-0.5 rounded shadow-sm">
+                              #{idx + 1}
+                            </div>
+                            {/* Scenario Badge */}
+                            {scenario && (
+                              <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-md text-[#007AFF] text-[9px] font-bold px-2 py-0.5 rounded shadow-sm max-w-[80px] truncate border border-blue-50">
+                                {scenario}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Content Section */}
+                          <div className="p-3 flex flex-col flex-1 bg-white min-h-0">
+                            {/* Titles */}
+                            <div className="mb-2.5">
+                              <h3 className="font-bold text-black text-xs md:text-sm line-clamp-2 leading-snug" title={cnTitle || enTitle}>
+                                {cnTitle || enTitle}
+                              </h3>
+                              {cnTitle && (
+                                <p className="text-[9px] text-[#8E8E93] line-clamp-1 mt-0.5 font-medium" title={enTitle}>
+                                  {enTitle}
+                                </p>
+                              )}
+                            </div>
+
+                            {/* Key Metrics Grid - More compact */}
+                            <div className="grid grid-cols-2 gap-x-2 gap-y-2 mb-3 mt-auto bg-[#F9F9FB] p-2 rounded-lg border border-gray-100/50">
+                              {/* Price & Shipping */}
+                              <div className="flex flex-col">
+                                <div className="text-[9px] text-[#8E8E93] font-bold mb-0.5 uppercase">售价</div>
+                                <div className="text-[#FF3B30] font-black text-xs sm:text-sm tracking-tight truncate">{price}</div>
+                              </div>
+                              <div className="flex flex-col">
+                                <div className="text-[9px] text-[#8E8E93] font-bold mb-0.5 uppercase">运费</div>
+                                <div className="text-gray-800 font-bold text-[10px] sm:text-xs truncate">{shipping}</div>
+                              </div>
+                              
+                              {/* Sales Data */}
+                              <div className="flex flex-col">
+                                <div className="text-[9px] text-[#8E8E93] font-bold mb-0.5 flex items-center gap-1">
+                                  <span className="w-1 h-1 rounded-full bg-green-500"></span>
+                                  近7天
+                                </div>
+                                <div className="text-black font-black text-xs sm:text-sm truncate">{sales7d}</div>
+                              </div>
+                              <div className="flex flex-col">
+                                <div className="text-[9px] text-[#8E8E93] font-bold mb-0.5 uppercase">总销</div>
+                                <div className="text-gray-800 font-bold text-[10px] sm:text-xs truncate">{totalSales}</div>
+                              </div>
+                            </div>
+
+                            {/* Bottom Divider & Secondary Stats */}
+                            <div className="pt-2 border-t border-gray-100 flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <div className="flex items-center gap-0.5 text-[#FF9500] font-bold text-[9px] bg-[#FF9500]/5 px-1 rounded">
+                                  <svg className="w-2.5 h-2.5 fill-current" viewBox="0 0 20 20">
+                                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                                  </svg>
+                                  {rating}
+                                </div>
+                                <div className="text-[#8E8E93] flex items-center gap-0.5 font-bold text-[9px] bg-gray-50 px-1 rounded">
+                                  <Users size={10} className="text-gray-400" />
+                                  {creators}
+                                </div>
+                              </div>
+                              <div className="text-[#8E8E93] font-medium text-[8px] uppercase tracking-wider scale-90 origin-right">
+                                {date}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {browseProducts.length === 0 && (
+                    <div className="flex flex-col items-center justify-center h-40 text-[#8E8E93]">
+                      <AlertCircle size={32} className="mb-2 opacity-30" />
+                      <p className="font-medium text-sm">暂无交集商品</p>
                     </div>
                   )}
                 </div>
