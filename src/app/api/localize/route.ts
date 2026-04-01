@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
 
                 let srcField = '';
                 let titleField = '';
-                const knownImageHeaders = ['主图src', 'src', '_original_url_'];
+                const knownImageHeaders = ['主图src', 'src', '_original_url_', '主图'];
                 const knownTitleHeaders = ['商品标题', '商品名', 'title', 'name'];
                 
                 const foundImageHeader = headers.find(h => knownImageHeaders.includes(h));

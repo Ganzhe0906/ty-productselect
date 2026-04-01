@@ -7,6 +7,8 @@ export interface Product {
   '商品售价': string | number;
   '邮费': string | number;
   '类目': string;
+  /** 如出海匠/表格中的「预估上架时间」 */
+  '上架时间'?: string;
   '评分': string | number;
   '商店名称': string;
   '店铺销量': string | number;
@@ -25,14 +27,18 @@ export interface Product {
 }
 
 export const FIELD_ALIASES: Record<string, string[]> = {
+  '主图src': ['主图src', '主图', '封面图', '商品主图', 'Cover', '图片链接'],
   '商品标题': ['商品标题', '商品名', '标题', 'Name', 'Title'],
   '商品售价': ['商品售价', '最低售价', '售价', '价格', 'Price', 'Sale Price'],
   '邮费': ['邮费', '物流费用', '运费', 'Shipping'],
+  '类目': ['类目', '分类', '品类', 'Category'],
+  '上架时间': ['上架时间', '预估上架时间', '上架日期', 'Listing Time', 'Listing Date', '上架'],
   '评分': ['评分', '商品评分', '店铺评分', 'Rating', 'Score'],
   '商店名称': ['商店名称', '店铺名', '店铺名称', 'Shop Name', 'Store Name'],
   '店铺销量': ['店铺销量', '店铺总销量', 'Shop Sales'],
   '近7天销量': ['近7天销量', '近 7 天销量', '7天销量', '7D Sales'],
-  '近7天销售额': ['近7天销售额', '近 7 天销售额', '7天销售额', '7D Revenue'],
+  '近7天销售额': ['近7天销售额', '近 7 天销售额', '7天销售额', '7D Revenue', '近7天GMV($)', '近7天GMV'],
+  '总销售额': ['总销售额', '总销售额($)', '累计销售额'],
   '总销量': ['总销量', '销量', '累计销量', 'Total Sales'],
   '关联达人': ['关联达人', '达人数量', '达人', '关联达人数', 'Influencers', 'Creator Count'],
   '达人出单率': ['达人出单率', '出单率', '转化率', '达人转化率', 'Conversion', 'Conv %', 'CR%'],

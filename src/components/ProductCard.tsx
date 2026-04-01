@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { motion, PanInfo, useMotionValue, useTransform } from 'framer-motion';
 import { Product, getProductField } from '@/lib/excel';
-import { Heart, X, ShoppingBag, Users, Eye, Loader2 } from 'lucide-react';
+import { Heart, X, ShoppingBag, Eye, Loader2, CalendarDays, Video } from 'lucide-react';
 
 interface ProductCardProps {
   product: Product;
@@ -54,18 +54,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
     return `¥${p}`;
   };
   
-  // 处理百分比显示的辅助函数
-  const formatPercent = (value: any) => {
-    if (value === undefined || value === null || String(value).trim() === '' || String(value) === 'undefined') {
-      return '0%';
-    }
-    const v = String(value).trim();
-    // 如果已经包含百分号，直接返回，不再额外添加
-    if (v.includes('%')) return v;
-    // 否则添加百分号
-    return `${v}%`;
-  };
-
   const handleDragEnd = (_: any, info: PanInfo) => {
     if (info.offset.x > 100) {
       onSwipe('right');
@@ -178,6 +166,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
             </div>
           </div>
 
+          {String(getProductField(product, '上架时间') || '').trim() !== '' && (
+            <div className="flex items-center gap-2 bg-slate-50/80 px-2.5 py-2 rounded-xl border border-slate-100">
+              <CalendarDays size={14} className="text-slate-500 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider">上架时间</div>
+                <div className="text-xs md:text-sm font-bold text-slate-800 truncate">
+                  {getProductField(product, '上架时间')}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* 核心指标网格 - 更加紧凑 */}
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-blue-50/40 p-2 md:p-2.5 rounded-xl border border-blue-100/50">
@@ -195,19 +195,25 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
               <div className="text-sm md:text-lg font-black text-green-700">{getProductField(product, '关联达人')}</div>
             </div>
 
-            <div className="bg-gray-50/60 p-2 md:p-2.5 rounded-xl border border-gray-100">
-              <div className="text-gray-500 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5">Conversion</div>
-              <div className="text-sm md:text-lg font-black text-gray-700">{formatPercent(getProductField(product, '达人出单率'))}</div>
+            <div className="bg-amber-50/50 p-2 md:p-2.5 rounded-xl border border-amber-100/60">
+              <div className="text-amber-700/80 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                <Video size={10} /> 关联视频
+              </div>
+              <div className="text-sm md:text-lg font-black text-amber-900">{getProductField(product, '关联视频')}</div>
             </div>
           </div>
 
           {/* 次要信息 - 单行紧凑 */}
           <div className="flex items-center justify-between text-[10px] md:text-xs text-gray-400 pt-1 border-t border-gray-100/50">
-            <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1"><Eye size={10} /> {getProductField(product, '视频曝光量')}</span>
-              <span className="flex items-center gap-1"><Users size={10} /> {getProductField(product, '关联视频')}</span>
+            <div className="flex items-center gap-3 min-w-0">
+              {String(getProductField(product, '视频曝光量') || '').trim() !== '' && (
+                <span className="flex items-center gap-1 shrink-0"><Eye size={10} /> {getProductField(product, '视频曝光量')}</span>
+              )}
+              {String(getProductField(product, '类目') || '').trim() !== '' && (
+                <span className="truncate text-gray-500 font-medium">{getProductField(product, '类目')}</span>
+              )}
             </div>
-            <span className="truncate max-w-[100px] md:max-w-[150px] font-medium">{getProductField(product, '商店名称')}</span>
+            <span className="truncate max-w-[100px] md:max-w-[150px] font-medium shrink-0">{getProductField(product, '商店名称')}</span>
           </div>
         </div>
 

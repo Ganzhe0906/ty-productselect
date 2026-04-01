@@ -440,7 +440,7 @@ export default function Home() {
       const rows = rawData.slice(1);
 
       // 识别字段
-      const knownImageHeaders = ['主图src', 'src', '_original_url_'];
+      const knownImageHeaders = ['主图src', 'src', '_original_url_', '主图'];
       const knownTitleHeaders = ['商品标题', '商品名', 'title', 'name'];
       const srcField = headers.find(h => knownImageHeaders.includes(h)) || headers[0];
       const titleField = headers.find(h => knownTitleHeaders.includes(h));
