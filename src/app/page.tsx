@@ -1658,7 +1658,7 @@ export default function Home() {
                 className="absolute inset-0 flex flex-col z-10"
               >
                 {!isFinished ? (
-                  <div className="flex-1 flex flex-col px-4">
+                  <div className="flex-1 flex flex-col px-4 min-h-0">
                     {/* Top Controls: Progress, Save, Exit */}
                     <div className="mb-4 space-y-3">
                       <div className="flex items-center justify-between gap-4">
@@ -1692,7 +1692,7 @@ export default function Home() {
                     </div>
 
                     {/* Card Stack */}
-                    <div className="flex-1 relative">
+                    <div className="flex-1 relative min-h-0">
                       {/* Background Card */}
                       {currentIndex + 1 < products.length && (
                         <ProductCard 

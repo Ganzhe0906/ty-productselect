@@ -54,6 +54,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
     return `¥${p}`;
   };
   
+  const originalTitle =
+    String(
+      getProductField(product, '商品标题') ||
+        product['商品名'] ||
+        product['Title'] ||
+        product['title'] ||
+        ''
+    ).trim();
+
   const handleDragEnd = (_: any, info: PanInfo) => {
     if (info.offset.x > 100) {
       onSwipe('right');
@@ -78,8 +87,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
       onDragEnd={handleDragEnd}
       className="absolute inset-0 ios-card bg-white/90 ios-blur overflow-hidden flex flex-col md:flex-row touch-none cursor-grab active:cursor-grabbing"
     >
-      {/* 左侧/顶部：大图展示 */}
-      <div className="h-[40%] md:h-full md:w-[55%] bg-white relative p-2 md:p-4 flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-gray-100/30">
+      {/* 左侧/顶部：大图展示（略压缩高度，把空间让给信息区一屏显示） */}
+      <div className="h-[34%] min-h-[120px] md:h-full md:w-[52%] md:min-h-0 bg-white relative p-1.5 md:p-3 flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-gray-100/30 shrink-0">
         <div className="relative w-full h-full flex items-center justify-center">
           {isImageLoading && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-50/50 rounded-xl z-10">
@@ -124,110 +133,114 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onSwipe, isTo
         </motion.div>
       </div>
 
-      {/* 右侧/底部：紧凑信息区 */}
-      <div className="h-[60%] md:h-full md:w-[45%] flex flex-col p-3 md:p-6 justify-between overflow-hidden">
-        <div className="flex-1 flex flex-col justify-start md:justify-center space-y-2 md:space-y-5 overflow-y-auto pr-1 custom-scrollbar">
-          {/* 标题与翻译 */}
-          <div className="space-y-1">
-            <h2 className="text-sm md:text-lg font-bold text-gray-900 tracking-tight leading-tight md:leading-snug line-clamp-2">
-              {getProductField(product, '商品标题')}
-            </h2>
+      {/* 右侧/底部：一屏内展示，禁用内部滚动 */}
+      <div className="min-h-0 flex-1 md:h-full md:w-[48%] md:flex-none md:min-h-0 flex flex-col px-2 py-2 md:p-4 overflow-hidden">
+        <div className="min-h-0 flex-1 flex flex-col justify-start gap-1.5 md:gap-2 overflow-hidden">
+          {/* 原标题 + AI 摘要：始终顶对齐，避免桌面端垂直居中导致「上面空一块」 */}
+          <div className="shrink-0 space-y-0.5">
+            <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">原标题</div>
+            <p
+              className={`text-[11px] md:text-sm font-semibold text-gray-800 leading-snug ${originalTitle ? 'line-clamp-3' : 'text-gray-300 italic'}`}
+              title={originalTitle || undefined}
+            >
+              {originalTitle || '（无原标题）'}
+            </p>
             <div className="flex flex-wrap gap-1">
               {getProductField(product, '中文商品名') && (
-                <div className="inline-flex items-center px-2 py-1 rounded-md text-sm md:text-base font-black bg-blue-50 text-blue-600 border border-blue-100/50">
-                  {getProductField(product, '中文商品名')}
+                <div className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] md:text-sm font-black bg-blue-50 text-blue-600 border border-blue-100/50 max-w-full">
+                  <span className="truncate">{getProductField(product, '中文商品名')}</span>
                 </div>
               )}
               {getProductField(product, '场景用途') && (
-                <div className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] md:text-[11px] font-medium bg-purple-50 text-purple-600 border border-purple-100/50">
-                  {getProductField(product, '场景用途')}
+                <div className="inline-flex items-center px-1 py-0.5 rounded text-[9px] md:text-[10px] font-medium bg-purple-50 text-purple-600 border border-purple-100/50 max-w-full">
+                  <span className="truncate">{getProductField(product, '场景用途')}</span>
                 </div>
               )}
             </div>
           </div>
 
-          {/* 核心指标 - 突出价格 */}
-          <div className="bg-orange-50/40 p-2 md:p-3 rounded-xl border border-orange-100/50 flex items-center justify-between">
-            <div className="flex flex-col">
-              <span className="text-orange-600 text-[8px] md:text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
-                <ShoppingBag size={10} /> Current Price
+          {/* 类目 / 店铺：上移到价格上方，保证无需下滚即可看到 */}
+          {(String(getProductField(product, '类目') || '').trim() !== '' ||
+            String(getProductField(product, '商店名称') || '').trim() !== '') && (
+            <div className="shrink-0 flex items-start gap-1.5 text-[10px] md:text-[11px] text-gray-500 leading-tight border-b border-gray-100/80 pb-1">
+              <span className="shrink-0 font-bold text-gray-400">类目</span>
+              <span className="min-w-0 flex-1 font-medium text-gray-600 line-clamp-2" title={String(getProductField(product, '类目') || '')}>
+                {getProductField(product, '类目') || '—'}
               </span>
-              <div className="font-black text-orange-700 text-lg md:text-2xl leading-none mt-0.5">
+              <span className="shrink-0 truncate max-w-[38%] text-right text-gray-500" title={String(getProductField(product, '商店名称') || '')}>
+                {getProductField(product, '商店名称')}
+              </span>
+            </div>
+          )}
+
+          <div className="bg-orange-50/40 px-2 py-1.5 md:p-2 rounded-lg border border-orange-100/50 flex items-center justify-between gap-2 shrink-0">
+            <div className="min-w-0">
+              <span className="text-orange-600 text-[8px] font-bold uppercase tracking-wider flex items-center gap-1">
+                <ShoppingBag size={9} /> Price
+              </span>
+              <div className="font-black text-orange-700 text-base md:text-xl leading-none mt-0.5 truncate">
                 {formatPrice(getProductField(product, '商品售价'))}
               </div>
             </div>
-            <div className="text-right">
-              <div className="text-[8px] md:text-[9px] font-bold text-orange-600/60 uppercase">
-                {Number(getProductField(product, '邮费')) === 0 ? 'Free Shipping' : `+ ¥${getProductField(product, '邮费')} Shipping`}
+            <div className="text-right shrink-0">
+              <div className="text-[8px] font-bold text-orange-600/60 uppercase">
+                {Number(getProductField(product, '邮费')) === 0 ? 'Free Ship' : `+¥${getProductField(product, '邮费')}`}
               </div>
-              <div className="text-[10px] md:text-xs font-semibold text-orange-700/80 mt-0.5">
-                Rating: {getProductField(product, '评分')}
+              <div className="text-[10px] font-semibold text-orange-700/80">
+                ★{getProductField(product, '评分')}
               </div>
             </div>
           </div>
 
           {String(getProductField(product, '上架时间') || '').trim() !== '' && (
-            <div className="flex items-center gap-2 bg-slate-50/80 px-2.5 py-2 rounded-xl border border-slate-100">
-              <CalendarDays size={14} className="text-slate-500 shrink-0" />
-              <div className="min-w-0">
-                <div className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider">上架时间</div>
-                <div className="text-xs md:text-sm font-bold text-slate-800 truncate">
-                  {getProductField(product, '上架时间')}
-                </div>
-              </div>
+            <div className="shrink-0 flex items-center gap-1.5 bg-slate-50/90 px-2 py-1 rounded-lg border border-slate-100">
+              <CalendarDays size={12} className="text-slate-500 shrink-0" />
+              <span className="text-[8px] font-bold text-slate-400 uppercase shrink-0">上架</span>
+              <span className="text-[11px] md:text-xs font-bold text-slate-800 truncate">
+                {getProductField(product, '上架时间')}
+              </span>
             </div>
           )}
 
-          {/* 核心指标网格 - 更加紧凑 */}
-          <div className="grid grid-cols-2 gap-2">
-            <div className="bg-blue-50/40 p-2 md:p-2.5 rounded-xl border border-blue-100/50">
-              <div className="text-blue-600 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5">7D Sales</div>
-              <div className="text-sm md:text-lg font-black text-blue-700">{getProductField(product, '近7天销量')}</div>
+          <div className="grid grid-cols-2 gap-1.5 min-h-0 shrink">
+            <div className="bg-blue-50/40 px-1.5 py-1 md:p-2 rounded-lg border border-blue-100/50">
+              <div className="text-blue-600 text-[7px] md:text-[8px] font-bold uppercase tracking-wide mb-0.5">7D</div>
+              <div className="text-xs md:text-base font-black text-blue-700 truncate">{getProductField(product, '近7天销量')}</div>
             </div>
-            
-            <div className="bg-purple-50/40 p-2 md:p-2.5 rounded-xl border border-purple-100/50">
-              <div className="text-purple-600 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5">Total Sales</div>
-              <div className="text-sm md:text-lg font-black text-purple-700">{getProductField(product, '总销量')}</div>
+            <div className="bg-purple-50/40 px-1.5 py-1 md:p-2 rounded-lg border border-purple-100/50">
+              <div className="text-purple-600 text-[7px] md:text-[8px] font-bold uppercase tracking-wide mb-0.5">Total</div>
+              <div className="text-xs md:text-base font-black text-purple-700 truncate">{getProductField(product, '总销量')}</div>
             </div>
-
-            <div className="bg-green-50/40 p-2 md:p-2.5 rounded-xl border border-green-100/50">
-              <div className="text-green-600 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5">Influencers</div>
-              <div className="text-sm md:text-lg font-black text-green-700">{getProductField(product, '关联达人')}</div>
+            <div className="bg-green-50/40 px-1.5 py-1 md:p-2 rounded-lg border border-green-100/50">
+              <div className="text-green-600 text-[7px] md:text-[8px] font-bold uppercase tracking-wide mb-0.5">达人数</div>
+              <div className="text-xs md:text-base font-black text-green-700 truncate">{getProductField(product, '关联达人')}</div>
             </div>
-
-            <div className="bg-amber-50/50 p-2 md:p-2.5 rounded-xl border border-amber-100/60">
-              <div className="text-amber-700/80 text-[8px] md:text-[9px] font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1">
-                <Video size={10} /> 关联视频
+            <div className="bg-amber-50/50 px-1.5 py-1 md:p-2 rounded-lg border border-amber-100/60">
+              <div className="text-amber-700/80 text-[7px] md:text-[8px] font-bold uppercase tracking-wide mb-0.5 flex items-center gap-0.5">
+                <Video size={9} /> 视频
               </div>
-              <div className="text-sm md:text-lg font-black text-amber-900">{getProductField(product, '关联视频')}</div>
+              <div className="text-xs md:text-base font-black text-amber-900 truncate">{getProductField(product, '关联视频')}</div>
             </div>
           </div>
 
-          {/* 次要信息 - 单行紧凑 */}
-          <div className="flex items-center justify-between text-[10px] md:text-xs text-gray-400 pt-1 border-t border-gray-100/50">
-            <div className="flex items-center gap-3 min-w-0">
-              {String(getProductField(product, '视频曝光量') || '').trim() !== '' && (
-                <span className="flex items-center gap-1 shrink-0"><Eye size={10} /> {getProductField(product, '视频曝光量')}</span>
-              )}
-              {String(getProductField(product, '类目') || '').trim() !== '' && (
-                <span className="truncate text-gray-500 font-medium">{getProductField(product, '类目')}</span>
-              )}
+          {String(getProductField(product, '视频曝光量') || '').trim() !== '' && (
+            <div className="shrink-0 flex items-center gap-1 text-[10px] text-gray-400">
+              <Eye size={10} />
+              <span className="truncate">曝光 {getProductField(product, '视频曝光量')}</span>
             </div>
-            <span className="truncate max-w-[100px] md:max-w-[150px] font-medium shrink-0">{getProductField(product, '商店名称')}</span>
-          </div>
+          )}
         </div>
 
-        {/* 底部操作区 */}
-        <div className="flex gap-2 md:gap-3 pt-3">
-          <button 
+        <div className="shrink-0 flex gap-2 pt-2 pb-0.5">
+          <button
             onClick={() => onSwipe('left')}
-            className="flex-1 py-2 md:py-3 rounded-xl bg-gray-100 text-red-500 font-bold ios-button flex items-center justify-center gap-2 text-xs md:text-sm"
+            className="flex-1 py-2 md:py-2.5 rounded-xl bg-gray-100 text-red-500 font-bold ios-button flex items-center justify-center gap-2 text-xs"
           >
             <X size={16} strokeWidth={3} /> Pass
           </button>
-          <button 
+          <button
             onClick={() => onSwipe('right')}
-            className="flex-1 py-2 md:py-3 rounded-xl bg-black text-white font-bold ios-button flex items-center justify-center gap-2 text-xs md:text-sm"
+            className="flex-1 py-2 md:py-2.5 rounded-xl bg-black text-white font-bold ios-button flex items-center justify-center gap-2 text-xs"
           >
             <Heart size={16} fill="currentColor" strokeWidth={3} /> Like
           </button>
